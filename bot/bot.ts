@@ -38,7 +38,7 @@ const P = {
   crateW: ENV("MF_CRATEW", 1),
 }
 
-const UPGRADE_PREF = ["armor", "nanites", "plating", "laser_damage", "laser_charge", "gun_rate", "gun_damage", "lightning_efficiency", "gyros", "lightning_range", "lightning_chain", "gun_mag", "gun_velocity", "mortar_reload", "sensors", "servos", "capacitor", "reactor", "jets", "mortar_velocity", "mortar_splash", "laser_pierce"]
+const UPGRADE_PREF = process.env.MF_UPS ? process.env.MF_UPS.split(",") : ["armor", "nanites", "plating", "laser_damage", "laser_charge", "gun_rate", "gun_damage", "lightning_efficiency", "gyros", "lightning_range", "lightning_chain", "gun_mag", "gun_velocity", "mortar_reload", "sensors", "servos", "capacitor", "reactor", "jets", "mortar_velocity", "mortar_splash", "laser_pierce"]
 
 let W: World | null = null
 
