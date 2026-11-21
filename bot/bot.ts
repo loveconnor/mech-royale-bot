@@ -36,6 +36,8 @@ const P = {
   roofAfter: ENV("MF_ROOFAFTER", 45),
   npcRange: ENV("MF_NPCRANGE", 250),
   crateW: ENV("MF_CRATEW", 1),
+  ldodge: ENV("MF_LDODGE", 0), // sidestep enemy lasers this long (s) into their charge
+  precharge: ENV("MF_PRECHARGE", 0), // charge the laser behind cover before a known enemy shows up
 }
 
 const UPGRADE_PREF = process.env.MF_UPS ? process.env.MF_UPS.split(",") : ["armor", "nanites", "plating", "laser_damage", "laser_charge", "gun_rate", "gun_damage", "lightning_efficiency", "gyros", "lightning_range", "lightning_chain", "gun_mag", "gun_velocity", "mortar_reload", "sensors", "servos", "capacitor", "reactor", "jets", "mortar_velocity", "mortar_splash", "laser_pierce"]
@@ -69,6 +71,9 @@ class Bot {
   modeTarget = -1
   scanPhase = 0
   laserHold = 0
+  chargeStart = new Map<number, number>()
+  dodgeDir = 0
+  dodgeUntil = -99
   crateMem = new Map<number, { pos: V3; hp: number; t: number }>()
   pickMem = new Map<number, { pos: V3; kind: string; t: number }>()
   cubeMem = new Map<number, { pos: V3; t: number }>()
@@ -206,7 +211,8 @@ class Bot {
       mv = this.fightMove(target, mv)
       if (P.fboost && me.energy > P.fboost && this.t - target.seenT < 0.5 && this.losClear(pos, target)) boost = true
     }
-    const evade = this.shellEvade(obs)
+    let evade = this.shellEvade(obs)
+    if (!evade && mode !== "zone") { evade = this.laserDodge(obs); if (evade) this.strafeT = this.t + 0.3 + this.rng() * 0.3 }
     if (evade) { mv = evade; boost = true }
     if (me.weapons.some((w: any) => w && w.kind === "laser" && w.charge > 0)) boost = false
     // stuck handling
@@ -255,6 +261,11 @@ class Bot {
         cubes: m.cubes ?? 0, weapons: m.weapons ?? [], charging: !!m.charging, seenT: this.t, firstT: old && this.t - old.seenT < 6 ? old.firstT : this.t, vis: true,
       })
     }
+    for (const m of obs.mechs as any[]) {
+      if (m.charging) { if (!this.chargeStart.has(m.id)) this.chargeStart.set(m.id, this.t - 0.05) }
+      else this.chargeStart.delete(m.id)
+    }
+    for (const id of this.chargeStart.keys()) if (!seen.has(id)) this.chargeStart.delete(id)
     for (const [id, tr] of this.tracks) {
       if (!seen.has(id)) {
         tr.vis = false
@@ -740,6 +751,40 @@ class Bot {
     return [(tx - pos[0]) / L, (ty - pos[1]) / L]
   }
 
+  // an enemy charging a laser at us: commit to a sidestep against our current drift shortly before it can fire
+  laserDodge(obs: Observation): number[] | null {
+    if (!P.ldodge) return null
+    const me = this.me, pos = me.pos
+    if (this.t < this.dodgeUntil && this.dodgeDir) {
+      return this.dodgeVec
+    }
+    for (const m of obs.mechs as any[]) {
+      if (m.kind !== "mech" || !m.charging) continue
+      const st = this.chargeStart.get(m.id)
+      if (st === undefined) continue
+      const el = this.t - st
+      if (el < P.ldodge) continue
+      const bx = pos[0] - m.pos[0], by = pos[1] - m.pos[1]
+      const d = Math.hypot(bx, by)
+      if (d > 280 || d < 8) continue
+      const off = Math.abs(wrap(Math.atan2(by, bx) - m.aim[0]))
+      if (off > Math.atan2(10, d) + 0.05) continue
+      const tr = this.tracks.get(m.id)
+      if (tr && !this.losClear(pos, tr)) continue
+      // perpendicular, opposite to our current sideways drift
+      const px = -by / d, py = bx / d
+      const lat = me.vel[0] * px + me.vel[1] * py
+      let dir = lat > 0.5 ? -1 : lat < -0.5 ? 1 : this.rng() < 0.5 ? -1 : 1
+      if (!W!.walkLine(pos[0], pos[1], pos[0] + px * dir * 6, pos[1] + py * dir * 6)) dir = -dir
+      this.dodgeDir = dir
+      this.dodgeVec = [px * dir, py * dir]
+      this.dodgeUntil = this.t + 0.45
+      return this.dodgeVec
+    }
+    return null
+  }
+  dodgeVec: number[] = [0, 0]
+
   shellEvade(obs: Observation): number[] | null {
     const pos = this.me.pos
     const g = this.cfg.weapons.mortar.gravity
@@ -940,6 +985,8 @@ class Bot {
     }
     // don't release laser into nothing
     if (lzS >= 0 && !tgt && ws[lzS].charge > 0) fire[lzS] = true
+    // pre-charge behind cover for an enemy we expect to see soon
+    if (P.precharge && lzS >= 0 && !tgt && ws[lzS].charge === 0 && ws[lzS].cooldown <= 0.05 && target && target.kind === "mech" && this.t - target.seenT < 3 && d2(target.pos, pos) < 170 && !["zone", "retreat", "getweapon", "explore", "regen"].includes(this.mode)) fire[lzS] = true
     act.aim = [aim[0], clamp(aim[1], this.cfg.mech.min_pitch, this.cfg.mech.max_pitch)]
     act.fire = fire
   }
