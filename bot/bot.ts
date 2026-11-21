@@ -30,6 +30,8 @@ const P = {
   fboost: ENV("MF_FBOOST", 0),
   npcHunt: ENV("MF_NPCHUNT", 0),
   roof: ENV("MF_ROOF", 0),
+  hunt: ENV("MF_HUNT", 0),
+  huntHp: ENV("MF_HUNTHP", 0.75),
   roofAfter: ENV("MF_ROOFAFTER", 45),
   npcRange: ENV("MF_NPCRANGE", 250),
   crateW: ENV("MF_CRATEW", 1),
@@ -71,6 +73,7 @@ class Bot {
   cubeMem = new Map<number, { pos: V3; t: number }>()
   badPick = new Map<number, number>()
   killSites: { pos: V3; t: number }[] = []
+  sndMem: { x: number; y: number; t: number; kind: string }[] = []
   npcMem = new Map<number, { pos: V3; t: number; hp: number }>()
   retreating = false
   coverGoal: [number, number] | null = null
@@ -108,6 +111,7 @@ class Bot {
     const act: any = {}
     this.updateTracks(obs)
     this.handleEvents(obs)
+    this.updateSounds(obs)
 
     // upgrades
     if (obs.offer) act.pick = this.pickUpgrade(obs.offer)
@@ -188,6 +192,8 @@ class Bot {
         const dg = P.dropGo ? this.dropGoal(obs, zone, enemies) : null
         if (dg) { mode = "drop"; goal = dg }
         else if (!this.hasSpecial()) { mode = "explore"; goal = this.explore(zone) }
+        else if (P.hunt && hpFrac > P.huntHp && (rg = this.huntGoal(zone))) { mode = "hunt"; goal = rg }
+        else if (P.hunt && hpFrac > P.huntHp) { mode = "search"; goal = this.explore(zone) }
         else { mode = "roam"; goal = this.roamGoal(zone) }
       }
     }
@@ -267,6 +273,37 @@ class Bot {
     for (const [id, c] of this.crateMem) if (!visC.has(id) && (d2(c.pos, me) < 30 || this.t - c.t > 60)) this.crateMem.delete(id)
     for (const [id, c] of this.pickMem) if (!visP.has(id) && (d2(c.pos, me) < 30 || this.t - c.t > 90)) this.pickMem.delete(id)
     for (const [id, c] of this.cubeMem) if (!visQ.has(id) && (d2(c.pos, me) < 30 || this.t - c.t > 60)) this.cubeMem.delete(id)
+  }
+
+  updateSounds(obs: Observation) {
+    const me = obs.self.pos
+    const est: any = { near: 35, mid: 110, far: 220 }
+    for (const sd of (obs.sounds as any[]) || []) {
+      if (!["gun", "laser", "lightning", "mortar", "step", "boost", "jet", "laser_charge", "reload", "crate"].includes(sd.kind)) continue
+      const r = est[sd.dist] ?? 100
+      this.sndMem.push({ x: me[0] + Math.cos(sd.bearing) * r, y: me[1] + Math.sin(sd.bearing) * r, t: this.t, kind: sd.kind })
+    }
+    this.sndMem = this.sndMem.filter((m) => this.t - m.t < 12).slice(-40)
+  }
+
+  huntGoal(zone: any): [number, number] | null {
+    const pos = this.me.pos
+    let best: [number, number] | null = null, bs = 1e9
+    for (const m of this.sndMem) {
+      if (!this.zoneOk([m.x, m.y], zone)) continue
+      const d = Math.hypot(m.x - pos[0], m.y - pos[1])
+      if (d < 15) continue
+      const sc = d + (this.t - m.t) * 15
+      if (sc < bs) { bs = sc; best = [m.x, m.y] }
+    }
+    // remembered (out of sight) mechs are even better leads
+    for (const e of this.tracks.values()) {
+      if (e.kind !== "mech" || this.t - e.seenT > 8) continue
+      const d = d2(e.pos, pos)
+      const sc = d * 0.7 + (this.t - e.seenT) * 10
+      if (sc < bs && this.zoneOk(e.pos, zone)) { bs = sc; best = [e.pos[0], e.pos[1]] }
+    }
+    return best
   }
 
   handleEvents(obs: Observation) {
@@ -360,7 +397,7 @@ class Bot {
     const d = d2(t.pos, this.me.pos)
     if (this.dmgFrom(t.id, 6) > 0) return true
     if (d < 70) return true
-    if (P.seek && hpFrac > 0.6) return true
+    if ((P.seek || P.hunt) && hpFrac > 0.6) return true
     return d < 140 && hpFrac > 0.5
   }
 
@@ -404,15 +441,15 @@ class Bot {
     let best: [number, number] = [pos[0], pos[1]], bs = -1e9
     const tx = threats.reduce((s, t) => s + t.pos[0], 0) / threats.length, ty = threats.reduce((s, t) => s + t.pos[1], 0) / threats.length
     const away = Math.atan2(pos[1] - ty, pos[0] - tx)
-    for (let k = 0; k < 20; k++) {
-      const a = (k / 20) * TAU
+    for (let k = 0; k < 12; k++) {
+      const a = (k / 12) * TAU
       for (const r of [12, 25, 40]) {
         const x = pos[0] + Math.cos(a) * r, y = pos[1] + Math.sin(a) * r
         const c = W!.toCell(x, y)
         if (c < 0 || !W!.walk[c]) continue
         let hidden = 0
         const gz = W!.ground(x, y) + 6
-        for (const t of threats) if (W!.blocked(t.pos[0], t.pos[1], t.pos[2] + 8, x, y, gz, 1.5)) hidden++
+        for (const t of threats.slice(0, 3)) if (W!.blocked(t.pos[0], t.pos[1], t.pos[2] + 8, x, y, gz, 3)) hidden++
         let s = hidden * 100 - r * 0.8 + 25 * Math.cos(wrap(a - away))
         if (!this.insideNext([x, y], zone) && !(zone.nr > 300)) s -= 60
         if (!W!.walkLine(pos[0], pos[1], x, y)) s -= 30
@@ -666,7 +703,7 @@ class Bot {
     }
     const needPlan = !this.path || !this.pathGoal || d2(this.pathGoal, goal) > 6 || this.t - this.pathT > 2.5
     if (needPlan && (!this.path || !this.busy(10))) {
-      this.path = W!.astar(pos[0], pos[1], pos[2], goal[0], goal[1], null, this.busy(6) ? 6000 : 15000)
+      this.path = W!.astar(pos[0], pos[1], pos[2], goal[0], goal[1], null, this.busy(6) ? 2500 : 7000)
       this.pathGoal = goal
       this.pathT = this.t
       this.pathIdx = 0
