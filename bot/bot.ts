@@ -28,6 +28,9 @@ const P = {
   jinkMin: ENV("MF_JINKMIN", 0.3),
   jinkVar: ENV("MF_JINKVAR", 0.5),
   fboost: ENV("MF_FBOOST", 0),
+  npcHunt: ENV("MF_NPCHUNT", 0),
+  npcRange: ENV("MF_NPCRANGE", 250),
+  crateW: ENV("MF_CRATEW", 1),
 }
 
 const UPGRADE_PREF = ["armor", "nanites", "plating", "laser_damage", "laser_charge", "gun_rate", "gun_damage", "lightning_efficiency", "gyros", "lightning_range", "lightning_chain", "gun_mag", "gun_velocity", "mortar_reload", "sensors", "servos", "capacitor", "reactor", "jets", "mortar_velocity", "mortar_splash", "laser_pierce"]
@@ -66,6 +69,7 @@ class Bot {
   cubeMem = new Map<number, { pos: V3; t: number }>()
   badPick = new Map<number, number>()
   killSites: { pos: V3; t: number }[] = []
+  npcMem = new Map<number, { pos: V3; t: number; hp: number }>()
   retreating = false
   coverGoal: [number, number] | null = null
   coverT = -99
@@ -154,7 +158,7 @@ class Bot {
       mode = "retreat"
       const threats = dangerEnemies.length ? dangerEnemies : enemies.filter((e) => this.t - e.seenT < 6)
       if (threats.length) {
-        if (!this.coverGoal || (this.t - this.coverT > 1.5 && !this.busy(12))) { this.coverGoal = this.coverPoint(pos, threats, zone); this.coverT = this.t }
+        if (!this.coverGoal || (this.t - this.coverT > 1.5 && !this.busy(8))) { this.coverGoal = this.coverPoint(pos, threats, zone); this.coverT = this.t }
         goal = this.coverGoal
         boost = d2(pos, goal) > 4 && recentlyHurt
       } else {
@@ -245,6 +249,8 @@ class Bot {
         if (this.t - tr.seenT > 8) this.tracks.delete(id)
       }
     }
+    for (const m of obs.mechs as any[]) if (m.kind === "npc") this.npcMem.set(m.id, { pos: m.pos, t: this.t, hp: m.hp ?? 350 })
+    for (const [id, n] of this.npcMem) if (!seen.has(id) && (d2(n.pos, obs.self.pos) < 35 || this.t - n.t > 120)) this.npcMem.delete(id)
     for (const c of obs.crates as any[]) this.crateMem.set(c.id, { pos: c.pos, hp: c.hp, t: this.t })
     for (const p of obs.pickups as any[]) this.pickMem.set(p.id, { pos: p.pos, kind: p.kind, t: this.t })
     for (const c of obs.cubes as any[]) this.cubeMem.set(c.id, { pos: c.pos, t: this.t })
@@ -510,7 +516,12 @@ class Bot {
     if (!nearEnemy && P.crateFarm) for (const [, c] of this.crateMem) {
       const d = d2(c.pos, pos)
       if (d > P.lootRange) continue
-      consider(c.pos, d + 25, "crate")
+      consider(c.pos, d * P.crateW + 25, "crate")
+    }
+    if (!nearEnemy && P.npcHunt && this.me.hp / this.me.max_hp > 0.55) for (const [, n] of this.npcMem) {
+      const d = d2(n.pos, pos)
+      if (d > P.npcRange || d < 50) continue
+      consider(n.pos, d * 0.5, "npc")
     }
     return best
   }
@@ -621,8 +632,8 @@ class Bot {
       return [((goal[0] - pos[0]) / dg) * s, ((goal[1] - pos[1]) / dg) * s]
     }
     const needPlan = !this.path || !this.pathGoal || d2(this.pathGoal, goal) > 6 || this.t - this.pathT > 2.5
-    if (needPlan && (!this.path || !this.busy(15))) {
-      this.path = W!.astar(pos[0], pos[1], pos[2], goal[0], goal[1], null, this.busy(8) ? 8000 : 30000)
+    if (needPlan && (!this.path || !this.busy(10))) {
+      this.path = W!.astar(pos[0], pos[1], pos[2], goal[0], goal[1], null, this.busy(6) ? 6000 : 15000)
       this.pathGoal = goal
       this.pathT = this.t
       this.pathIdx = 0
