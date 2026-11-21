@@ -3,4 +3,5 @@
 FROM oven/bun:1.4.4-slim
 WORKDIR /bot
 COPY bot/ /bot/
+ENV MF_ROOF=1
 ENTRYPOINT ["bun", "/bot/bot.ts"]
