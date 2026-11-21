@@ -103,6 +103,7 @@ export class World {
   surf: Float32Array
   steep: Uint8Array
   hN: Float32Array // nav cell surface height
+  roofSpots: number[] = []
   buildRoof() {
     const N = this.nx * this.ny
     this.roofTop = new Float32Array(N).fill(-1e9)
@@ -167,6 +168,21 @@ export class World {
         if (sup < 6) ok = false
       }
       this.walk[j * this.nnx + i] = ok ? 1 : 0
+    }
+    // roof camping spots: nav cells well above the ground whose 6 m neighbourhood is flat roof
+    this.roofSpots = []
+    for (let j = 3; j < this.nny - 3; j++) for (let i = 3; i < this.nnx - 3; i++) {
+      const c = j * this.nnx + i
+      if (!this.walk[c]) continue
+      const h = this.hN[c]
+      const g = this.terr[(2 * j + 1) * nx + 2 * i + 1]
+      if (h < g + 10 || h > g + 42) continue
+      let ok = true
+      for (let dj = -3; dj <= 3 && ok; dj++) for (let di = -3; di <= 3; di++) {
+        const n = (j + dj) * this.nnx + i + di
+        if (!this.walk[n] || Math.abs(this.hN[n] - h) > 1.0) { ok = false; break }
+      }
+      if (ok) this.roofSpots.push(c)
     }
     // clearance grid not used anymore: keep a cheap version for compatibility
     this.clear = new Float32Array(0)

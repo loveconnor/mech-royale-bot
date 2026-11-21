@@ -29,6 +29,8 @@ const P = {
   jinkVar: ENV("MF_JINKVAR", 0.5),
   fboost: ENV("MF_FBOOST", 0),
   npcHunt: ENV("MF_NPCHUNT", 0),
+  roof: ENV("MF_ROOF", 0),
+  roofAfter: ENV("MF_ROOFAFTER", 45),
   npcRange: ENV("MF_NPCRANGE", 250),
   crateW: ENV("MF_CRATEW", 1),
 }
@@ -149,11 +151,16 @@ class Bot {
     const closeFight = target && this.t - target.seenT < 0.6 && d2(target.pos, pos) < 22 && this.losClear(pos, target)
 
     let wg: { pos: [number, number]; what: string } | null = null
+    let rg: [number, number] | null = null
     const zoneUrgent = zone.urgent
     if (zoneUrgent || !me.in_zone) {
       mode = "zone"
       goal = zone.safePoint
       boost = !me.in_zone || zone.veryUrgent
+    } else if (P.roof && this.roofWanted() && (rg = this.roofGoal(zone)) && !(closeFight && d2(target!.pos, pos) < 15)) {
+      mode = d2(pos, rg) < 4 && pos[2] > W!.ground(pos[0], pos[1]) + 8 ? "camp" : "toroof"
+      goal = rg
+      if (mode === "camp") goal = [pos[0], pos[1]]
     } else if (this.retreating && !closeFight) {
       mode = "retreat"
       const threats = dangerEnemies.length ? dangerEnemies : enemies.filter((e) => this.t - e.seenT < 6)
@@ -473,6 +480,32 @@ class Bot {
     const ws = this.me.weapons.filter((w: any) => w).map((w: any) => w.kind)
     return this.dpsOf(ws, this.me.cubes, dist)
   }
+
+  roofSpot = -1
+  roofFailT = -99
+  roofWanted() { return (this.hasSpecial() || this.t > P.roofAfter) && this.t - this.roofFailT > 20 }
+  roofGoal(zone: any): [number, number] | null {
+    const pos = this.me.pos
+    const ok = (c: number) => d2([W!.cellX(c), W!.cellY(c)], zone.nc) < zone.nr - Math.min(20, zone.nr * 0.3)
+    if (this.roofSpot >= 0 && !ok(this.roofSpot)) this.roofSpot = -1
+    if (this.roofSpot < 0) {
+      if (this.busy(10)) return null
+      let best = -1, bs = 1e9
+      for (const c of W!.roofSpots) {
+        if (!ok(c)) continue
+        const x = W!.cellX(c), y = W!.cellY(c)
+        const sc = Math.hypot(x - pos[0], y - pos[1]) - (W!.hN[c] - W!.ground(x, y)) * 1.5
+        if (sc < bs) { bs = sc; best = c }
+      }
+      if (best < 0) return null
+      this.roofSpot = best
+      this.roofSetT = this.t
+    }
+    // give up if we cannot get there in reasonable time
+    if (this.t - this.roofSetT > 60 && d2(pos, [W!.cellX(this.roofSpot), W!.cellY(this.roofSpot)]) > 6) { this.roofFailT = this.t; this.roofSpot = -1; return null }
+    return [W!.cellX(this.roofSpot), W!.cellY(this.roofSpot)]
+  }
+  roofSetT = 0
 
   hasSpecial() { return this.me.weapons.some((w: any) => w && w.kind !== "gun") }
 
