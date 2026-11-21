@@ -32,6 +32,7 @@ const P = {
   roof: ENV("MF_ROOF", 0),
   hunt: ENV("MF_HUNT", 0),
   huntHp: ENV("MF_HUNTHP", 0.75),
+  huntNow: ENV("MF_HUNTNOW", 0),
   roofAfter: ENV("MF_ROOFAFTER", 45),
   npcRange: ENV("MF_NPCRANGE", 250),
   crateW: ENV("MF_CRATEW", 1),
@@ -191,7 +192,7 @@ class Bot {
       else {
         const dg = P.dropGo ? this.dropGoal(obs, zone, enemies) : null
         if (dg) { mode = "drop"; goal = dg }
-        else if (!this.hasSpecial()) { mode = "explore"; goal = this.explore(zone) }
+        else if (!this.hasSpecial() && !(P.huntNow && this.t > P.huntNow)) { mode = "explore"; goal = this.explore(zone) }
         else if (P.hunt && hpFrac > P.huntHp && (rg = this.huntGoal(zone))) { mode = "hunt"; goal = rg }
         else if (P.hunt && hpFrac > P.huntHp) { mode = "search"; goal = this.explore(zone) }
         else { mode = "roam"; goal = this.roamGoal(zone) }
