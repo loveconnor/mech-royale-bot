@@ -3,4 +3,6 @@
 FROM oven/bun:1.4.4-slim
 WORKDIR /bot
 COPY bot/ /bot/
+ENV MF_HUNT=1
+ENV MF_RETREAT=0.2
 ENTRYPOINT ["bun", "/bot/bot.ts"]
