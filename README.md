@@ -1,0 +1,35 @@
+# Mech Royale bot
+
+A `mechfight/1` bot for the Builders Buildathon **Mech Royale** track: 16-mech battle royale on the Ohio State campus.
+
+The `Dockerfile` sits at the repo root. It builds a Bun image that runs `bot/bot.ts`.
+
+## How it plays
+
+- **World model** (`bot/map.ts`): loads `/arena/v2/world.json` and `terrain.i16`, then builds:
+  - a 1 m surface-height raster (terrain, roofs, stadium stands);
+  - a prism spatial hash for line-of-sight checks;
+  - a 2 m multi-level navigation grid. Moves can step up 1.2 m and drop down any height. "Hop" edges let the A* search jet over walls and cliffs up to 40 m when there is energy.
+- **Navigation**: A* with lookahead smoothing. The bot jumps and jets when a path climbs, gets unstuck when blocked, and escapes roofs and the stadium bowl.
+- **Zone**: interpolates the live circle and gets inside the next circle with time to spare. A latch stops it flip-flopping at the edge.
+- **Loot**: weapon priority is laser > lightning > mortar (the gun is always kept). It explores until it finds a special weapon, collects cubes (including going back to kill sites), shoots crates and NPC drones for cubes, and captures supply drops when they're uncontested.
+- **Combat**:
+  - picks targets by threat (who is hurting us, low HP, distance, line of sight);
+  - leads the gun using the target's velocity and fires only when the torso is actually aligned and the line of fire is clear;
+  - charges the laser and releases it at full charge when aligned (hitscan, no lead);
+  - uses lightning in its cone, and mortar for far or indirect targets;
+  - strafes unpredictably, dodges incoming mortar shells, and faces its attacker to avoid the 1.5× rear damage.
+- **Retreat**: compares time-to-kill with time-to-live. It falls back to a cover point that breaks line of sight from all threats, keeps shooting while it backs off, and re-engages once it has regenerated. It won't run from an enemy it is about to kill.
+- **Upgrades**: armor, then nanites, plating, and laser/gun upgrades.
+
+## Test locally
+
+```sh
+# conformance check (kit from the track page, unpacked into ./kit)
+python3 kit/check/check.py -- bun bot/bot.ts
+docker build -t mech-bot .
+python3 kit/check/check.py --map-dir /arena -- docker run --rm -i --network none --cpus 1 --memory 512m \
+  --read-only --tmpfs /tmp:rw,size=64m --user 65534:65534 -v "$PWD/kit/arena:/arena:ro" mech-bot
+```
+
+`tools/bridge.mjs` runs the bot in a private room on play.joinbuilders.org; empty seats are filled by house bots. `tools/runmany.sh` runs batches of matches and summarizes placement, kills and damage.
