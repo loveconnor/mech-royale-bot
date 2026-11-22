@@ -36,6 +36,8 @@ const P = {
   roofAfter: ENV("MF_ROOFAFTER", 45),
   npcRange: ENV("MF_NPCRANGE", 250),
   crateW: ENV("MF_CRATEW", 1),
+  evade: ENV("MF_EVADE", 0), // after this many kills, stop hunting and keep away from the squad
+  evadeT: ENV("MF_EVADET", 0), // ...or after this many seconds
   quit: ENV("MF_QUIT", 0), // probe: stop acting after this many seconds (sitting target)
   ldodge: ENV("MF_LDODGE", 0), // sidestep enemy lasers this long (s) into their charge
   precharge: ENV("MF_PRECHARGE", 0), // charge the laser behind cover before a known enemy shows up
@@ -184,6 +186,11 @@ class Bot {
         mode = "regen"
         goal = [pos[0], pos[1]]
       }
+    } else if (this.evading() && !(target && this.t - target.seenT < 0.6 && (d2(target.pos, pos) < 45 || (this.dmgFrom(target.id, 2) > 0 && d2(target.pos, pos) < 90 && myTTK < myTTL)))) {
+      mode = "evade"
+      if (!this.evadeGoal || this.t - this.evadeGT > 2 || d2(pos, this.evadeGoal) < 5) { if (!this.busy(10)) { this.evadeGoal = this.evadePoint(pos, zone); this.evadeGT = this.t } }
+      goal = this.evadeGoal ?? [pos[0], pos[1]]
+      boost = recentlyHurt && d2(pos, goal) > 6
     } else if ((wg = !this.hasSpecial() ? this.lootGoal(obs, zone, enemies, true) : null) && wg.what === "wpn" && !(target && d2(target.pos, pos) < 60 && this.dmgFrom(target.id, 4) > 0)) {
       mode = "getweapon"
       goal = wg.pos
@@ -326,6 +333,7 @@ class Bot {
         this.dmgLog.push({ t: this.t, by: e.by, amt: e.amount, bearing: e.bearing })
         if (e.weapon !== "zone") this.lastDmgT = this.t
       } else if (e.type === "kill") {
+        if (this.tracks.get(e.target)?.kind !== "npc") this.kills++
         const tr = this.tracks.get(e.target)
         if (tr) this.killSites.push({ pos: [tr.pos[0], tr.pos[1], tr.pos[2]], t: this.t })
       } else if (e.type === "hit") {
@@ -786,6 +794,38 @@ class Bot {
     return null
   }
   dodgeVec: number[] = [0, 0]
+  kills = 0
+  evadeGoal: [number, number] | null = null
+  evadeGT = -99
+  evading() { return (P.evade > 0 && this.kills >= P.evade) || (P.evadeT > 0 && this.t > P.evadeT) }
+  // a spot inside the next circle as far as possible from every mech we know about, preferring cover
+  evadePoint(pos: number[], zone: any): [number, number] {
+    const threats = [...this.tracks.values()].filter((e) => e.kind === "mech" && this.t - e.seenT < 20)
+    const snd = this.sndMem.filter((m) => this.t - m.t < 6)
+    let best: [number, number] = [pos[0], pos[1]], bs = -1e9
+    for (let k = 0; k < 16; k++) {
+      const a = (k / 16) * TAU
+      for (const r of [0, 30, 60, 100]) {
+        if (r === 0 && k) continue
+        const x = pos[0] + Math.cos(a) * r, y = pos[1] + Math.sin(a) * r
+        const c = W!.toCell(x, y)
+        if (c < 0 || !W!.walk[c]) continue
+        if (!this.insideNext([x, y], zone, 15)) continue
+        let md = 400, hidden = 0
+        for (const t of threats) {
+          const d = Math.hypot(t.pos[0] - x, t.pos[1] - y)
+          md = Math.min(md, d)
+          if (d < 200 && W!.blocked(t.pos[0], t.pos[1], t.pos[2] + 8, x, y, W!.ground(x, y) + 6, 4)) hidden++
+        }
+        for (const m of snd) md = Math.min(md, Math.hypot(m.x - x, m.y - y) + 40)
+        let sc = Math.min(md, 250) + hidden * 25 - r * 0.15
+        // stay away from the edge of the next circle and from the current zone edge
+        sc -= Math.max(0, 40 - (zone.nr - d2([x, y], zone.nc))) * 1.5
+        if (sc > bs) { bs = sc; best = [x, y] }
+      }
+    }
+    return best
+  }
 
   shellEvade(obs: Observation): number[] | null {
     const pos = this.me.pos
