@@ -156,7 +156,10 @@ class Bot {
       let bestValue = -Infinity
       for (const foe of losThreats) {
         const distance = d2(pos,foe.pos)
-        const seconds = foe.hp / Math.max(1,this.myDps(distance))
+        const viewAngle = Math.atan2(pos[1]-foe.pos[1],pos[0]-foe.pos[0])
+        const rear = Math.abs(wrap(viewAngle-foe.aim[0])) > this.cfg.mech.front_arc_deg * Math.PI / 360 + 0.12
+        const multiplier = rear ? this.cfg.mech.rear_mult : 1
+        const seconds = foe.hp / Math.max(1,multiplier*this.myDps(distance))
         // A disabled or distracted mech can yield a place before a longer duel.
         const value = (1 + (pressure.get(foe.id) ?? 0)*0.45) / (seconds+1.5)
         if (value > bestValue) { bestValue = value; target = foe }
@@ -412,6 +415,30 @@ class Bot {
   insideNext(p: number[], zone: any, extra = 0) { return d2(p, zone.nc) < zone.nr - zone.margin - extra }
 
   // ---------------- decisions ----------------
+  // Keep the front armor toward recent incoming damage during breaks in combat.
+  // A heading between two bearings can cover both within the front arc.
+  guardFacing(preferred: number): number | null {
+    const hits = this.dmgLog.filter(hit => hit.bearing !== null && this.t - hit.t < 2.5)
+    if (!hits.length) return null
+    const halfArc = this.cfg.mech.front_arc_deg * Math.PI / 360
+    const start = this.me.aim[0]
+    const headings = [preferred, start]
+    for (const hit of hits) {
+      const bearing = hit.bearing!
+      headings.push(bearing, bearing - halfArc * 0.85, bearing + halfArc * 0.85)
+    }
+    let bestYaw = preferred, bestCost = Infinity
+    for (const yaw of headings) {
+      let cost = 12*Math.abs(wrap(yaw-preferred)) + 6*Math.abs(wrap(yaw-start))
+      for (const hit of hits) {
+        const age = this.t - hit.t
+        if (Math.abs(wrap(yaw-hit.bearing!)) > halfArc*0.95) cost += hit.amt * Math.exp(-age)
+      }
+      if (cost < bestCost) { bestCost = cost; bestYaw = yaw }
+    }
+    return bestYaw
+  }
+
   attackPressure(foe: Track, pos: number[]): number {
     if (this.dmgFrom(foe.id, 3) > 0) return 1
     const dx = pos[0]-foe.pos[0], dy = pos[1]-foe.pos[1]
@@ -517,6 +544,12 @@ class Bot {
     if (this.t > this.strafeT) { this.strafeDir = this.rng() < 0.5 ? -1 : 1; this.strafeT = this.t + P.jinkMin + this.rng() * P.jinkVar }
     const bx = t.pos[0] - pos[0], by = t.pos[1] - pos[1]
     const L = Math.hypot(bx, by) || 1
+    // Near the edge of a distracted mech's front arc, strafe onto its weaker side.
+    // Keep the normal jink when it is facing us or when we already have its back.
+    const side = wrap(Math.atan2(-by,-bx)-t.aim[0])
+    if (t.vis && Math.abs(side)>0.85 && Math.abs(side)<2.25 && this.dmgFrom(t.id,1)<1) {
+      this.strafeDir = side>0 ? -1 : 1
+    }
     const px = (-by / L) * this.strafeDir, py = (bx / L) * this.strafeDir
     // check strafe direction is walkable
     let sx = px, sy = py
@@ -1102,6 +1135,13 @@ class Bot {
         else yaw = curYaw + 0.6
       }
       aim = [yaw, 0]
+    }
+    if (!tgt || isNpc) {
+      const guard = this.guardFacing(aim[0])
+      if (guard !== null && Math.abs(wrap(guard-aim[0])) > 0.15) {
+        aim = [guard,0]
+        fire.fill(false)
+      }
     }
     // reload when idle
     if (gunS >= 0) {
