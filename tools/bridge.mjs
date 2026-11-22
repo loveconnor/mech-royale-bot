@@ -47,7 +47,9 @@ function startBot() {
     if (ws.readyState === 1 && b === bot) ws.send(line);
     try { myLog.write(JSON.stringify({ act: m, dt }) + "\n"); } catch {}
   });
-  b.on("exit", () => {});
+  b.stdin.on("error", (err) => {
+    if (err.code !== "EPIPE") console.error("bot stdin:", err.message);
+  });
   return b;
 }
 
@@ -89,12 +91,12 @@ ws.onmessage = (ev) => {
     stats.obs++;
     lastObsAt = Date.now();
     log?.write(JSON.stringify(m) + "\n");
-    try { bot?.stdin.write(JSON.stringify(m) + "\n"); } catch {}
+    if (bot?.stdin.writable) bot.stdin.write(JSON.stringify(m) + "\n");
     return;
   }
   if (m.type === "end") {
     log?.write(JSON.stringify(m) + "\n");
-    try { bot?.stdin.write(JSON.stringify(m) + "\n"); bot?.stdin.end(); } catch {}
+    if (bot?.stdin.writable) bot.stdin.end(JSON.stringify(m) + "\n");
     return;
   }
   if (m.type === "results") {

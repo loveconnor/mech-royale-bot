@@ -157,8 +157,9 @@ class Bot {
     const myTTK = target ? tgtHp / Math.max(1, this.myDps(d2(target.pos, pos))) : 1e9
     const losing = losThreats.length > 0 && myTTL < myTTK * P.ttkRatio
     this.dbg = `ttl${myTTL.toFixed(1)} ttk${myTTK.toFixed(1)}`
-    if (!this.retreating && (hpFrac < P.retreatHp || (losing && hpFrac < 0.7)) && (dangerEnemies.length > 0 || recentlyHurt) && !(target && myTTK < 2.5 && !losing)) { this.retreating = true; this.coverGoal = null }
-    if (this.retreating && hpFrac > P.reengageHp) this.retreating = false
+    const outnumbered = losThreats.length >= 2 && losing
+    if (!this.retreating && (outnumbered || hpFrac < P.retreatHp || (losing && hpFrac < 0.7)) && (dangerEnemies.length > 0 || recentlyHurt) && !(target && myTTK < 2.5 && !losing)) { this.retreating = true; this.coverGoal = null }
+    if (this.retreating && !outnumbered && hpFrac > P.reengageHp) this.retreating = false
     // the target is nearly dead and we can finish it: keep fighting
     if (this.retreating && target && losThreats.length === 1 && myTTK < myTTL * 0.7 && this.t - target.seenT < 0.5) this.retreating = false
     // an enemy right on top of us: fight instead of turning our back
@@ -175,7 +176,7 @@ class Bot {
       mode = d2(pos, rg) < 4 && pos[2] > W!.ground(pos[0], pos[1]) + 8 ? "camp" : "toroof"
       goal = rg
       if (mode === "camp") goal = [pos[0], pos[1]]
-    } else if (this.retreating && !closeFight) {
+    } else if (this.retreating && (!closeFight || outnumbered)) {
       mode = "retreat"
       const threats = dangerEnemies.length ? dangerEnemies : enemies.filter((e) => this.t - e.seenT < 6)
       if (threats.length) {
@@ -196,7 +197,13 @@ class Bot {
       goal = wg.pos
     } else if (target && this.wantEngage(target, hpFrac, enemies)) {
       mode = "fight"
-      goal = this.fightPosition(target, zone, enemies)
+      const cube = this.combatCube(obs, target, zone)
+      if (cube) {
+        mode = "collect"
+        goal = cube
+      } else {
+        goal = this.fightPosition(target, zone, enemies)
+      }
     } else if (P.regen && hpFrac < 0.8 && this.t - this.lastDmgT > 1 && !dangerEnemies.length) {
       mode = "regen"
       goal = [pos[0], pos[1]]
@@ -333,8 +340,9 @@ class Bot {
         this.dmgLog.push({ t: this.t, by: e.by, amt: e.amount, bearing: e.bearing })
         if (e.weapon !== "zone") this.lastDmgT = this.t
       } else if (e.type === "kill") {
-        if (this.tracks.get(e.target)?.kind !== "npc") this.kills++
+        this.kills++
         const tr = this.tracks.get(e.target)
+        this.tracks.delete(e.target)
         if (tr) this.killSites.push({ pos: [tr.pos[0], tr.pos[1], tr.pos[2]], t: this.t })
       } else if (e.type === "hit") {
         this.lastDealT = this.t
@@ -357,10 +365,9 @@ class Bot {
   zoneInfo(obs: Observation) {
     const z: any = obs.zone
     const t = this.t
-    const f = z.shrink_end > z.shrink_start ? clamp((t - z.shrink_start) / (z.shrink_end - z.shrink_start), 0, 1) : 0
-    const cx = z.center[0] + (z.next_center[0] - z.center[0]) * f
-    const cy = z.center[1] + (z.next_center[1] - z.center[1]) * f
-    const r = z.radius + (z.next_radius - z.radius) * f
+    // Observations already report the live center and radius during a shrink.
+    const [cx, cy] = z.center
+    const r = z.radius
     const pos = obs.self.pos
     const nr = z.next_radius
     const margin = Math.min(25, nr * 0.25)
@@ -431,6 +438,27 @@ class Bot {
     return 70
   }
 
+  combatCube(obs: Observation, target: Track, zone: ReturnType<Bot["zoneInfo"]>): [number, number] | null {
+    const pos = obs.self.pos
+    let best: [number, number] | null = null
+    let bestCost = 24
+    const enemyDistance = d2(pos, target.pos)
+    for (const cube of obs.cubes) {
+      const point = cube.pos
+      const distance = d2(pos, point)
+      // A short same-level pickup can heal immediately without breaking aim.
+      if (distance >= bestCost || Math.abs(point[2] - pos[2]) >= 4) continue
+      if (d2(point, [zone.cx, zone.cy]) >= zone.r || !W!.walkLine(pos[0], pos[1], point[0], point[1])) continue
+      const closingDistance = Math.max(0, enemyDistance - d2(point, target.pos))
+      const cost = distance + closingDistance
+      if (cost < bestCost) {
+        bestCost = cost
+        best = [point[0], point[1]]
+      }
+    }
+    return best
+  }
+
   fightPosition(t: Track, zone: any, enemies: Track[]): [number, number] {
     const pos = this.me.pos
     const d = d2(t.pos, pos)
@@ -470,7 +498,7 @@ class Bot {
         const c = W!.toCell(x, y)
         if (c < 0 || !W!.walk[c]) continue
         let hidden = 0
-        const gz = W!.ground(x, y) + 6
+        const gz = W!.hN[c] + this.myEye
         for (const t of threats.slice(0, 3)) if (W!.blocked(t.pos[0], t.pos[1], t.pos[2] + 8, x, y, gz, 3)) hidden++
         let s = hidden * 100 - r * 0.8 + 25 * Math.cos(wrap(a - away))
         if (!this.insideNext([x, y], zone) && !(zone.nr > 300)) s -= 60
@@ -907,18 +935,19 @@ class Bot {
     const gunS = slotOf("gun"), lzS = slotOf("laser"), ltS = slotOf("lightning"), moS = slotOf("mortar")
 
     // pick shooting target: enemy mech with LOS, else NPC, else crate
-    let tgt: Track | null = target && this.losClear(pos, target) ? target : null
+    let tgt: Track | null = target && target.vis && this.losClear(pos, target) ? target : null
     if (!tgt) {
       // any visible enemy with LOS
       let bd = 1e9
       for (const e of this.tracks.values()) {
-        if (e.kind !== "mech" || this.t - e.seenT > 1) continue
+        if (e.kind !== "mech" || !e.vis) continue
         const d = d2(e.pos, pos)
         if (d < bd && d < 230 && this.losClear(pos, e)) { bd = d; tgt = e }
       }
     }
     let isNpc = false
-    if (!tgt && P.npcFarm) {
+    const withdrawing = this.mode === "retreat" || this.mode === "regen" || this.mode === "evade" || (this.mode === "zone" && !me.in_zone)
+    if (!tgt && P.npcFarm && !withdrawing) {
       let bd = 1e9
       for (const n of npcs) {
         const d = d2(n.pos, pos)
@@ -928,7 +957,7 @@ class Bot {
       if (tgt) isNpc = true
     }
     let crateTgt: any = null
-    if (!tgt && P.crateFarm) {
+    if (!tgt && P.crateFarm && !withdrawing) {
       let bd = 1e9
       for (const c of obs.crates as any[]) {
         const d = d3(c.pos, pos)
@@ -1026,9 +1055,9 @@ class Bot {
       if (g.reload === 0 && g.ammo < g.stats.mag * 0.5 && !tgt) act.reload = true
     }
     // don't release laser into nothing
-    if (lzS >= 0 && !tgt && ws[lzS].charge > 0) fire[lzS] = true
+    if (!withdrawing && lzS >= 0 && !tgt && ws[lzS].charge > 0) fire[lzS] = true
     // pre-charge behind cover for an enemy we expect to see soon
-    if (P.precharge && lzS >= 0 && !tgt && ws[lzS].charge === 0 && ws[lzS].cooldown <= 0.05 && target && target.kind === "mech" && this.t - target.seenT < 3 && d2(target.pos, pos) < 170 && !["zone", "retreat", "getweapon", "explore", "regen"].includes(this.mode)) fire[lzS] = true
+    if (!withdrawing && P.precharge && lzS >= 0 && !tgt && ws[lzS].charge === 0 && ws[lzS].cooldown <= 0.05 && target && target.kind === "mech" && this.t - target.seenT < 3 && d2(target.pos, pos) < 170 && !["zone", "retreat", "getweapon", "explore", "regen"].includes(this.mode)) fire[lzS] = true
     act.aim = [aim[0], clamp(aim[1], this.cfg.mech.min_pitch, this.cfg.mech.max_pitch)]
     act.fire = fire
   }

@@ -11,15 +11,15 @@ The `Dockerfile` sits at the repo root. It builds a Bun image that runs `bot/bot
   - a prism spatial hash for line-of-sight checks;
   - a 2 m multi-level navigation grid. Moves can step up 1.2 m and drop down any height. "Hop" edges let the A* search jet over walls and cliffs up to 40 m when there is energy.
 - **Navigation**: A* with lookahead smoothing. The bot jumps and jets when a path climbs, gets unstuck when blocked, and escapes roofs and the stadium bowl.
-- **Zone**: interpolates the live circle and gets inside the next circle with time to spare. A latch stops it flip-flopping at the edge.
-- **Loot**: weapon priority is laser > lightning > mortar (the gun is always kept). It explores until it finds a special weapon, collects cubes (including going back to kill sites), shoots crates and NPC drones for cubes, and captures supply drops when they're uncontested.
+- **Zone**: reads the live circle from each observation and gets inside the next circle with time to spare. A latch stops it flip-flopping at the edge.
+- **Loot**: weapon priority is laser > lightning > mortar (the gun is always kept). It explores until it finds a special weapon, collects cubes (including going back to kill sites), shoots crates and NPC drones for cubes, and captures supply drops when they're uncontested. During a fight it can move to a nearby cube on a clear path while keeping its aim on the opponent.
 - **Combat**:
   - picks targets by threat (who is hurting us, low HP, distance, line of sight);
   - leads the gun using the target's velocity and fires only when the torso is actually aligned and the line of fire is clear;
   - charges the laser and releases it at full charge when aligned (hitscan, no lead);
   - uses lightning in its cone, and mortar for far or indirect targets;
   - strafes unpredictably, dodges incoming mortar shells, and faces its attacker to avoid the 1.5× rear damage.
-- **Retreat**: compares time-to-kill with time-to-live. It falls back to a cover point that breaks line of sight from all threats, keeps shooting while it backs off, and re-engages once it has regenerated. It won't run from an enemy it is about to kill.
+- **Retreat**: compares time-to-kill with time-to-live. It falls back to a cover point that breaks line of sight from all threats, keeps shooting while it backs off, and re-engages once it has regenerated. When several opponents have line of sight and can win the exchange, it heads for cover even at high HP. It avoids shooting crates and drones while withdrawing so it can regenerate.
 - **Upgrades**: armor, then nanites, plating, and laser/gun upgrades.
 
 ## Test locally
