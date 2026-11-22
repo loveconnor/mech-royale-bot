@@ -238,6 +238,14 @@ class Bot {
         else { mode = "roam"; goal = this.roamGoal(zone) }
       }
     }
+    if (mode === "fight" && target && losThreats.length && this.clipsNeedCover()) {
+      const cover = this.reloadCover(pos, losThreats, zone)
+      if (cover) {
+        mode = "reload-cover"
+        goal = cover
+        boost = me.energy > 30
+      }
+    }
     this.mode = mode
 
     // --- movement ---
@@ -557,6 +565,35 @@ class Bot {
     const ox = mv[0] * 0.8 + sx * 0.7, oy = mv[1] * 0.8 + sy * 0.7
     const n = Math.hypot(ox, oy) || 1
     return [ox / n, oy / n]
+  }
+
+  clipsNeedCover() {
+    const gun = this.me.weapons.find((w: any) => w?.kind === "gun")
+    if (!gun || gun.reload < 0.75) return false
+    return !this.me.weapons.some((w: any) => w && w.kind !== "gun" &&
+      (w.charge > 0 || w.cooldown < 0.65))
+  }
+
+  reloadGoal: [number, number] | null = null
+  reloadGoalT = -Infinity
+  reloadCover(pos: number[], threats: Track[], zone: any): [number, number] | null {
+    if (this.t-this.reloadGoalT < 0.4) return this.reloadGoal
+    this.reloadGoalT = this.t
+    this.reloadGoal = null
+    const threat = threats[0]
+    const angle = Math.atan2(pos[1]-threat.pos[1],pos[0]-threat.pos[0])
+    for (const distance of [5,10,15]) {
+      for (const turn of [1.57,-1.57,0,0.78,-0.78,2.35,-2.35]) {
+        const x = pos[0]+distance*Math.cos(angle+turn), y = pos[1]+distance*Math.sin(angle+turn)
+        if (!this.zoneOk([x,y],zone) || !W!.walkLine(pos[0],pos[1],x,y)) continue
+        const z = W!.surfAt(x,y)+this.myEye
+        if (threats.every(e => W!.blocked(e.pos[0],e.pos[1],this.centerZ(e),x,y,z,1.5,1))) {
+          this.reloadGoal = [x,y]
+          return this.reloadGoal
+        }
+      }
+    }
+    return null
   }
 
   coverPoint(pos: number[], threats: Track[], zone: any): [number, number] {
@@ -1157,7 +1194,7 @@ class Bot {
     // reload when idle
     if (gunS >= 0) {
       const g = ws[gunS]
-      if (g.reload === 0 && g.ammo < g.stats.mag * 0.5 && !tgt) act.reload = true
+      if (g.reload === 0 && g.ammo <= g.stats.mag * 0.75 && !tgt && !target) act.reload = true
     }
     // don't release laser into nothing
     if (!withdrawing && lzS >= 0 && !tgt && ws[lzS].charge > 0) fire[lzS] = true
