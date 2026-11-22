@@ -36,6 +36,7 @@ const P = {
   roofAfter: ENV("MF_ROOFAFTER", 45),
   npcRange: ENV("MF_NPCRANGE", 250),
   crateW: ENV("MF_CRATEW", 1),
+  quit: ENV("MF_QUIT", 0), // probe: stop acting after this many seconds (sitting target)
   ldodge: ENV("MF_LDODGE", 0), // sidestep enemy lasers this long (s) into their charge
   precharge: ENV("MF_PRECHARGE", 0), // charge the laser behind cover before a known enemy shows up
 }
@@ -108,6 +109,7 @@ class Bot {
   act(obs: Observation): Omit<Action, "tick"> {
     this.t0 = performance.now()
     const me = obs.self
+    if (P.quit && obs.t > P.quit) return { move: [0, 0], fire: [false, false], boost: false } as any
     this.me = me
     this.t = obs.t
     const st: any = me.stats || {}
