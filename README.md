@@ -12,6 +12,7 @@ The `Dockerfile` sits at the repo root. It builds a Bun image that runs `bot/bot
   - a 2 m multi-level navigation grid. Moves can step up 1.2 m and drop down any height. "Hop" edges let the A* search jet over walls and cliffs up to 40 m when there is energy.
 - **Navigation**: A* with lookahead smoothing. The bot jumps and jets when a path climbs, gets unstuck when blocked, and escapes roofs and the stadium bowl.
 - **Zone**: reads the live circle from each observation and gets inside the next circle with time to spare. A latch stops it flip-flopping at the edge.
+- **Opening route**. While under six cubes during the first 100 seconds, the bot scores pairs of known loot stops by their expected value and the time to reach and collect them. It considers weapon pickups, crates, and loose cubes. It returns to normal combat decisions when threatened.
 - **Loot**: weapon priority is laser > lightning > mortar (the gun is always kept). It explores until it finds a special weapon, collects cubes (including going back to kill sites), shoots crates and NPC drones for cubes, and moves toward a supply drop before it lands if it can reach and hold the ring before a nearby rival. A capture restores full HP and energy. During a fight it favors nearby cube clusters on walkable paths until the ten-cube HP and damage cap. Beyond the cap it makes a short combat detour only if the next cube unlocks an upgrade.
 - **Combat**:
   - picks targets by threat (who is hurting us, low HP, distance, line of sight);

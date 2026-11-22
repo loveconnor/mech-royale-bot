@@ -196,6 +196,12 @@ class Bot {
       if (!this.evadeGoal || this.t - this.evadeGT > 2 || d2(pos, this.evadeGoal) < 5) { if (!this.busy(10)) { this.evadeGoal = this.evadePoint(pos, zone); this.evadeGT = this.t } }
       goal = this.evadeGoal ?? [pos[0], pos[1]]
       boost = recentlyHurt && d2(pos, goal) > 6
+    } else if (this.t < 100 && me.cubes < 6 && !recentlyHurt &&
+               !dangerEnemies.some(e => d2(e.pos,pos) < 85) &&
+               (wg = this.openingLoot(obs, zone))) {
+      mode = "opening:" + wg.what
+      goal = wg.pos
+      boost = me.energy > 55 && d2(pos,goal) > 10
     } else if ((wg = !this.hasSpecial() ? this.lootGoal(obs, zone, enemies, true) : null) && wg.what === "wpn" && !(target && d2(target.pos, pos) < 60 && this.dmgFrom(target.id, 4) > 0)) {
       mode = "getweapon"
       goal = wg.pos
@@ -618,6 +624,39 @@ class Bot {
     return dl < zone.r - 30 && !zone.urgent && zone.timeLeft > 25
   }
 
+  // Estimate the value of the next two stops using only observed loot.
+  openingLoot(obs: Observation, zone: ReturnType<Bot["zoneInfo"]>) {
+    const pos = obs.self.pos
+    const stops: {pos: [number,number]; what: string; value: number; service: number; travel: number}[] = []
+    const add = (p: number[], what: string, value: number, service: number) => {
+      const dist = d2(pos,p)
+      if (dist > 115 || !this.zoneOk(p,zone)) return
+      const climb = Math.max(0,p[2] - W!.ground(p[0],p[1]) - 3)
+      if (climb > 12 && p[2] > pos[2]+3) return
+      const travel = dist / this.cfg.mech.walk_speed + (W!.walkLine(pos[0],pos[1],p[0],p[1]) ? 0 : 2) + Math.min(climb,Math.max(0,p[2]-pos[2]))/4
+      stops.push({pos:[p[0],p[1]],what,value,service,travel})
+    }
+    for (const c of obs.cubes) add(c.pos,"cube",1,0.15)
+    for (const c of obs.crates) add(c.pos,"crate",this.hasSpecial()?1:1.45,(c.hp??300)/(this.hasWeapon("laser")?210:105))
+    for (const p of this.pickMem.values()) {
+      if (this.pickupWanted(p.kind)) add(p.pos,"wpn",this.hasSpecial()?0.8:(p.kind==="laser"?3.8:3),0.3)
+    }
+    stops.sort((a,b)=>b.value/(1+b.travel+b.service)-a.value/(1+a.travel+a.service))
+    const shortlist = stops.slice(0,12)
+    let best = null, bestRate = 0
+    for (const a of shortlist) {
+      const time = a.travel + a.service
+      let rate = a.value/(2+time)
+      for (const b of shortlist) {
+        if (a===b || (a.what==="wpn" && b.what==="wpn")) continue
+        const nextTime = d2(a.pos,b.pos)/this.cfg.mech.walk_speed + b.service
+        rate = Math.max(rate,(a.value + 0.7*b.value)/(2+time+0.7*nextTime))
+      }
+      if (rate>bestRate) { bestRate=rate; best=a }
+    }
+    return best
+  }
+
   lootGoal(obs: Observation, zone: any, enemies: Track[], wantWeapon: boolean): { pos: [number, number]; what: string } | null {
     const pos = this.me.pos
     let best: { pos: [number, number]; what: string } | null = null, bs = 1e9
@@ -976,7 +1015,7 @@ class Bot {
     }
     let isNpc = false
     const withdrawing = this.mode === "retreat" || this.mode === "regen" || this.mode === "evade" || (this.mode === "zone" && !me.in_zone)
-    if (!tgt && P.npcFarm && !withdrawing) {
+    if (!tgt && P.npcFarm && !withdrawing && this.mode !== "opening:crate") {
       let bd = 1e9
       for (const n of npcs) {
         const d = d2(n.pos, pos)
@@ -1060,6 +1099,11 @@ class Bot {
       const dist = d3(crateTgt.pos, pos)
       const tol = Math.atan2(1.0, dist)
       if (gunS >= 0 && Math.abs(wrap(aim[0] - curYaw)) < tol && Math.abs(aim[1] - curPitch) < tol && ws[gunS].ammo > 0) fire[gunS] = true
+      if (lzS >= 0 && this.mode === "opening:crate") {
+        const laser = ws[lzS]
+        const aligned = Math.abs(wrap(aim[0]-curYaw)) < tol && Math.abs(aim[1]-curPitch) < tol
+        fire[lzS] = laser.cooldown <= 0.05 && !(aligned && laser.charge >= laser.stats.charge - 0.02)
+      }
       if (ltS >= 0 && dist < 40 && Math.abs(wrap(aim[0] - curYaw)) < 0.2 && me.energy > 50) fire[ltS] = true
     }
 
