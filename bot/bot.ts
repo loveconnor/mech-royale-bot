@@ -172,6 +172,10 @@ class Bot {
       mode = "zone"
       goal = zone.safePoint
       boost = !me.in_zone || zone.veryUrgent
+    } else if (P.dropGo && (rg = this.dropGoal(obs, zone, enemies, myTTL))) {
+      mode = "drop"
+      goal = rg
+      boost = d2(pos, goal) > 12 && me.energy > 45
     } else if (P.roof && this.roofWanted() && (rg = this.roofGoal(zone)) && !(closeFight && d2(target!.pos, pos) < 15)) {
       mode = d2(pos, rg) < 4 && pos[2] > W!.ground(pos[0], pos[1]) + 8 ? "camp" : "toroof"
       goal = rg
@@ -211,9 +215,7 @@ class Bot {
       const lg = this.lootGoal(obs, zone, enemies, false)
       if (lg) { mode = "loot:" + lg.what; goal = lg.pos }
       else {
-        const dg = P.dropGo ? this.dropGoal(obs, zone, enemies) : null
-        if (dg) { mode = "drop"; goal = dg }
-        else if (!this.hasSpecial() && !(P.huntNow && this.t > P.huntNow)) { mode = "explore"; goal = this.explore(zone) }
+        if (!this.hasSpecial() && !(P.huntNow && this.t > P.huntNow)) { mode = "explore"; goal = this.explore(zone) }
         else if (P.hunt && hpFrac > P.huntHp && (rg = this.huntGoal(zone))) { mode = "hunt"; goal = rg }
         else if (P.hunt && hpFrac > P.huntHp) { mode = "search"; goal = this.explore(zone) }
         else { mode = "roam"; goal = this.roamGoal(zone) }
@@ -441,16 +443,28 @@ class Bot {
   combatCube(obs: Observation, target: Track, zone: ReturnType<Bot["zoneInfo"]>): [number, number] | null {
     const pos = obs.self.pos
     let best: [number, number] | null = null
-    let bestCost = 24
+    // Cubes improve damage and HP up to the cap; extra size keeps growing.
+    // Beyond the cap, only detour for a nearby upgrade threshold.
+    const config = this.cfg.cubes
+    const room = Math.max(0, config.stat_cap - obs.self.cubes)
+    const nextUpgrade = config.upgrade_thresholds.find((n: number) => n > obs.self.cubes)
+    if (!room && nextUpgrade !== obs.self.cubes + 1) return null
+    const budget = room ? 40 : 12
+    let bestCost = budget
     const enemyDistance = d2(pos, target.pos)
     for (const cube of obs.cubes) {
       const point = cube.pos
       const distance = d2(pos, point)
-      // A short same-level pickup can heal immediately without breaking aim.
-      if (distance >= bestCost || Math.abs(point[2] - pos[2]) >= 4) continue
+      if (distance > budget + 12 || Math.abs(point[2] - pos[2]) >= 4) continue
       if (d2(point, [zone.cx, zone.cy]) >= zone.r || !W!.walkLine(pos[0], pos[1], point[0], point[1])) continue
       const closingDistance = Math.max(0, enemyDistance - d2(point, target.pos))
-      const cost = distance + closingDistance
+      // A cluster from a defeated opponent can be collected in one pass.
+      let neighbors = 0
+      for (const other of obs.cubes) {
+        if (neighbors >= Math.min(2, room - 1)) break
+        if (other.id !== cube.id && Math.abs(other.pos[2] - point[2]) < 4 && d2(other.pos, point) < 7) neighbors++
+      }
+      const cost = distance + closingDistance - 6 * neighbors
       if (cost < bestCost) {
         bestCost = cost
         best = [point[0], point[1]]
@@ -669,17 +683,32 @@ class Bot {
     return this.exploreGoal!
   }
 
-  dropGoal(obs: Observation, zone: any, enemies: Track[]): [number, number] | null {
-    const pos = this.me.pos
-    for (const dr of (obs.drops as any[]) || []) {
-      const d = d2(dr.pos, pos)
-      if (d > 180) continue
-      if (dr.lands_in > d / 11.7 + 3) continue
-      const contested = enemies.filter((e) => d2(e.pos, dr.pos) < 50).length
-      if (contested >= 2) continue
-      return [dr.pos[0], dr.pos[1]]
+  dropGoal(obs: Observation, zone: ReturnType<Bot["zoneInfo"]>, enemies: Track[], ttl: number): [number, number] | null {
+    const me = obs.self
+    let best: [number, number] | null = null
+    let bestCost = Infinity
+    for (const drop of obs.drops) {
+      if (drop.holder !== null && drop.holder !== me.id) continue
+      const distance = d2(me.pos, drop.pos)
+      const walkTime = Math.max(0, distance - drop.radius + 2) / this.cfg.mech.walk_speed
+      const captureTime = drop.capture_s - (drop.holder === me.id ? drop.progress : 0)
+      const time = Math.max(walkTime, drop.lands_in) + captureTime
+      const missingHp = 1 - me.hp / me.max_hp
+      const valuable = me.cubes < 10 || missingHp > 0.2
+      if (walkTime > (valuable ? 14 : 5) || drop.lands_in > walkTime + 5) continue
+      if (d2(drop.pos, [zone.cx, zone.cy]) > zone.r ||
+          (time + 3 > zone.timeLeft && d2(drop.pos, zone.nc) > zone.nr - drop.radius)) continue
+      if (time + 1 > ttl) continue
+      // Skip a race that a visible opponent can finish before we arrive.
+      const enemyDistance = enemies.reduce((nearest, e) => Math.min(nearest, d2(e.pos, drop.pos)), Infinity)
+      if (enemyDistance < drop.radius || (enemyDistance + drop.radius < distance && enemyDistance < 40)) continue
+      const cost = time + Math.max(0, 60 - enemyDistance) / 12
+      if (cost < bestCost) {
+        bestCost = cost
+        best = [drop.pos[0], drop.pos[1]]
+      }
     }
-    return null
+    return best
   }
 
   roamGoal(zone: any): [number, number] {
