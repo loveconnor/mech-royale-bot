@@ -25,7 +25,7 @@ async function newCode() {
   throw new Error("no room");
 }
 
-const { code, room } = await newCode();
+const { code, room } = process.env.ROOM ? { code: process.env.CODE, room: Number(process.env.ROOM) } : await newCode();
 console.error(`room ${room} code ${code}`);
 const url = `wss://${HOST}/r/${room}/play?token=&sid=${sid}&name=${encodeURIComponent(name)}&code=${code}`;
 const ws = new WebSocket(url);
@@ -72,7 +72,7 @@ ws.onmessage = (ev) => {
     if (!readySent || (m.you && !m.you.ready)) { readySent = true; ws.send(JSON.stringify({ type: "ready", name })); }
     if (!inMatch && k < NMATCH && m.you?.host && m.phase !== "running" && Date.now() - startSentAt > 4000) {
       startSentAt = Date.now();
-      setTimeout(() => ws.send(JSON.stringify({ type: "start" })), 800);
+      setTimeout(() => ws.send(JSON.stringify({ type: "start", ...(process.env.STARTX ? JSON.parse(process.env.STARTX) : {}) })), 800);
     }
     return;
   }
