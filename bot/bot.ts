@@ -1,5 +1,6 @@
 // Mech Royale bot: navigation, looting, target selection, lead aiming, weapon handling, cover and zone play.
 import { type Action, draw, type Hello, type Observation, run } from "./mechfight.ts"
+import { MotionHistory } from "./motion.ts"
 import { World } from "./map.ts"
 
 type V3 = [number, number, number]
@@ -48,6 +49,7 @@ const UPGRADE_PREF = process.env.MF_UPS ? process.env.MF_UPS.split(",") : ["armo
 let W: World | null = null
 
 class Bot {
+  motion = new MotionHistory()
   name = "osu-mech"
   cfg: any
   t = 0
@@ -290,6 +292,7 @@ class Bot {
     const seen = new Set<number>()
     for (const m of obs.mechs as any[]) {
       seen.add(m.id)
+      if (m.kind === "mech") this.motion.observe(m.id,this.t,m.vel)
       const old = this.tracks.get(m.id)
       this.tracks.set(m.id, {
         id: m.id, kind: m.kind, pos: m.pos, vel: m.vel, aim: m.aim, hp: m.hp ?? old?.hp ?? 1400, maxHp: m.max_hp ?? old?.maxHp ?? 1400,
@@ -977,16 +980,20 @@ class Bot {
     const m = this.muzzle()
     let px = t.pos[0], py = t.pos[1], pz = this.centerZ(t)
     const vz = t.vel[2] || 0
+    let flight = 0
     for (let i = 0; i < 4; i++) {
       const d = Math.hypot(px - m[0], py - m[1], pz - m[2])
       const tt = Math.max(0, d - 3) / speed + 0.05
+      flight = tt
       px = t.pos[0] + t.vel[0] * tt * P.lead
       py = t.pos[1] + t.vel[1] * tt * P.lead
       pz = this.centerZ(t) + (Math.abs(vz) > 0.5 ? vz * tt - 0.5 * 22 * tt * tt * (t.pos[2] > W!.ground(t.pos[0], t.pos[1]) + 1 ? 1 : 0) : 0)
       const gz = W!.ground(px, py)
       if (pz < gz + 1) pz = gz + 1
     }
-    return [px, py, pz]
+    const point: V3 = [px,py,pz]
+    if (t.kind === "mech") this.motion.adjust("gun",t,this.me.pos,this.t,flight,point)
+    return point
   }
 
   aimTo(p: number[]): [number, number] {
@@ -1114,8 +1121,9 @@ class Bot {
         if (tgt.kind === "mech" && m.cooldown <= 0 && dist <= 60 &&
             dist > Math.max(16, this.myR+this.cfg.weapons.mortar.splash_radius+4)) {
           const arrival = dist/m.stats.speed
-          const point = [tgt.pos[0]+tgt.vel[0]*arrival, tgt.pos[1]+tgt.vel[1]*arrival,
+          const point: V3 = [tgt.pos[0]+tgt.vel[0]*arrival, tgt.pos[1]+tgt.vel[1]*arrival,
             tgt.pos[2]+0.7*(this.centerZ(tgt)-tgt.pos[2])]
+          this.motion.adjust("mortar",tgt,pos,this.t,arrival,point)
           const arc = this.mortarSolve(point,false)
           if (arc && arc[1] > this.cfg.mech.min_pitch && arc[1] < this.cfg.mech.max_pitch) {
             aim = [arc[0],arc[1]]
@@ -1125,7 +1133,8 @@ class Bot {
         } else if (m.cooldown <= 0 && dist > 30 && dist < 220 && !(lzS >= 0 && ws[lzS].charge > 0)) {
           const sol0 = this.mortarSolve([tgt.pos[0], tgt.pos[1], tgt.pos[2]], false)
           if (sol0) {
-            const lp = [tgt.pos[0] + tgt.vel[0] * sol0[2], tgt.pos[1] + tgt.vel[1] * sol0[2], tgt.pos[2]]
+            const lp: V3 = [tgt.pos[0] + tgt.vel[0] * sol0[2], tgt.pos[1] + tgt.vel[1] * sol0[2], tgt.pos[2]]
+            if (tgt.kind === "mech") this.motion.adjust("mortar",tgt,pos,this.t,sol0[2],lp)
             const sol = this.mortarSolve(lp, false)
             if (sol && dist > 60) {
               const ma: [number, number] = [sol[0], sol[1]]
