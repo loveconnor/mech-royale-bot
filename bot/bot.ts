@@ -43,7 +43,7 @@ const P = {
   precharge: ENV("MF_PRECHARGE", 0), // charge the laser behind cover before a known enemy shows up
 }
 
-const UPGRADE_PREF = process.env.MF_UPS ? process.env.MF_UPS.split(",") : ["armor", "nanites", "plating", "laser_damage", "laser_charge", "gun_rate", "gun_damage", "lightning_efficiency", "gyros", "lightning_range", "lightning_chain", "gun_mag", "gun_velocity", "mortar_reload", "sensors", "servos", "capacitor", "reactor", "jets", "mortar_velocity", "mortar_splash", "laser_pierce"]
+const UPGRADE_PREF = process.env.MF_UPS ? process.env.MF_UPS.split(",") : ["plating", "armor", "nanites", "laser_damage", "gun_damage", "gun_mag", "laser_charge", "gun_rate", "lightning_efficiency", "gyros", "lightning_range", "lightning_chain", "gun_velocity", "mortar_reload", "sensors", "servos", "capacitor", "reactor", "jets", "mortar_velocity", "mortar_splash", "laser_pierce"]
 
 let W: World | null = null
 
@@ -781,9 +781,19 @@ class Bot {
   }
 
   pickUpgrade(offer: any): number {
+    // A larger magazine also shortens the reload. Compare actual sustained
+    // output so extra rounds lose priority once the first drum is installed.
+    const gun = this.me.weapons.find((w: any) => w?.kind === "gun")?.stats
+    let preferDrum = false
+    if (gun) {
+      const cycle = (mag: number, reload: number) => mag / (mag * gun.cooldown + reload)
+      preferDrum = cycle(gun.mag + 8, gun.reload * 0.8) > 1.15 * cycle(gun.mag, gun.reload)
+    }
     let bi = 0, br = 1e9
     offer.choices.forEach((c: any, i: number) => {
       let r = UPGRADE_PREF.indexOf(c.id)
+      if (!process.env.MF_UPS && c.id === "gun_mag" && preferDrum)
+        r = UPGRADE_PREF.indexOf("gun_damage") - 0.5
       if (r < 0) r = 50
       if (r < br) { br = r; bi = i }
     })

@@ -22,7 +22,7 @@ The `Dockerfile` sits at the repo root. It builds a Bun image that runs `bot/bot
   - uses lightning within its cone. When carrying a mortar, it leads nearby mechs outside its own splash radius and keeps firing the gun when aligned. It also lobs shells at distant targets;
   - strafes unpredictably, dodges incoming mortar shells, and faces its attacker to avoid the 1.5× rear damage.
 - **Retreat**: compares time-to-kill with time-to-live. It falls back to a cover point that breaks line of sight from all threats, keeps shooting while it backs off, and re-engages once it has regenerated. When several opponents have line of sight and can win the exchange, it heads for cover even at high HP. It avoids shooting crates and drones while withdrawing so it can regenerate.
-- **Upgrades**: armor, then nanites, plating, and laser/gun upgrades.
+- **Upgrades**: takes plating first for an immediate increase in current and maximum HP, followed by armor and repair nanites. When choosing between gun upgrades, it compares the magazine and reload improvement with the damage bonus using the gun’s current stats.
 
 ## Test locally
 
