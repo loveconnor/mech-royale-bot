@@ -60,6 +60,7 @@ class Bot {
   dmgLog: { t: number; by: number | null; amt: number; bearing: number | null }[] = []
   lastDmgT = -99
   lastDealT = -99
+  protectRepair = false
   // navigation
   path: number[] | null = null
   pathGoal: [number, number] | null = null
@@ -122,6 +123,13 @@ class Bot {
     this.updateTracks(obs)
     this.handleEvents(obs)
     this.updateSounds(obs)
+    // Let passive regeneration run while moving to pickups and the next zone.
+    // Starting only when the lost healing is substantial avoids starving the opening.
+    const healRate = st.regen_per_s ?? this.cfg.mech.regen_per_s
+    const missingHp = me.max_hp - me.hp
+    if (!me.in_zone || missingHp < healRate) this.protectRepair = false
+    else if (missingHp > healRate * this.cfg.mech.regen_delay) this.protectRepair = true
+
 
     // upgrades
     if (obs.offer) act.pick = this.pickUpgrade(obs.offer)
@@ -705,12 +713,12 @@ class Bot {
       if (d > 150) continue
       consider(k.pos, d * 0.5, "kill")
     }
-    if (!nearEnemy && P.crateFarm) for (const [, c] of this.crateMem) {
+    if (!this.protectRepair && !nearEnemy && P.crateFarm) for (const [, c] of this.crateMem) {
       const d = d2(c.pos, pos)
       if (d > P.lootRange) continue
       consider(c.pos, d * P.crateW + 25, "crate")
     }
-    if (!nearEnemy && P.npcHunt && this.me.hp / this.me.max_hp > 0.55) for (const [, n] of this.npcMem) {
+    if (!this.protectRepair && !nearEnemy && P.npcHunt && this.me.hp / this.me.max_hp > 0.55) for (const [, n] of this.npcMem) {
       const d = d2(n.pos, pos)
       if (d > P.npcRange || d < 50) continue
       consider(n.pos, d * 0.5, "npc")
@@ -784,6 +792,21 @@ class Bot {
     let bi = 0, br = 1e9
     offer.choices.forEach((c: any, i: number) => {
       let r = UPGRADE_PREF.indexOf(c.id)
+      if (!process.env.MF_UPS) {
+        // Plating gives an immediate health increase. After the first fight,
+        // shorten the repair delay when there is enough clock left to use it.
+        if (c.id === "plating") r = -2
+        if (c.id === "nanites" && this.t < 130 && this.me.hp < this.me.max_hp * 0.85) r = -3
+        if (c.id === "gun_mag") {
+          const gun = this.me.weapons.find((w: any) => w?.kind === "gun")
+          if (gun) {
+            const {mag, cooldown, reload} = gun.stats
+            const secondsPerShot = cooldown + reload / mag
+            const upgraded = cooldown + 0.8 * reload / (mag + 8)
+            if (secondsPerShot / upgraded > 1.15) r = 2.5
+          }
+        }
+      }
       if (r < 0) r = 50
       if (r < br) { br = r; bi = i }
     })
@@ -1039,12 +1062,12 @@ class Bot {
       for (const n of npcs) {
         const d = d2(n.pos, pos)
         const hostile = this.dmgLog.some((x) => x.by === n.id && this.t - x.t < 5)
-        if ((hostile || (d < 120 && me.hp / me.max_hp > 0.4)) && d < bd && this.losClear(pos, n)) { bd = d; tgt = n }
+        if ((hostile || (!this.protectRepair && d < 120 && me.hp / me.max_hp > 0.4)) && d < bd && this.losClear(pos, n)) { bd = d; tgt = n }
       }
       if (tgt) isNpc = true
     }
     let crateTgt: any = null
-    if (!tgt && P.crateFarm && !withdrawing) {
+    if (!tgt && !this.protectRepair && P.crateFarm && !withdrawing) {
       let bd = 1e9
       for (const c of obs.crates as any[]) {
         const d = d3(c.pos, pos)
