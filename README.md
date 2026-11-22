@@ -18,7 +18,7 @@ The `Dockerfile` sits at the repo root. It builds a Bun image that runs `bot/bot
   - accounts for the rear damage multiplier when choosing between visible targets and circles toward the exposed side of distracted opponents;
   - between mech engagements, turns its front armor toward the directions responsible for the most recent damage;
   - leads the gun using the target's velocity and fires only when the torso is actually aligned and the line of fire is clear;
-  - charges the laser and releases it at full charge when aligned (hitscan, no lead);
+  - charges the laser and releases it when aligned. It fires early if the beam can finish a mech even with three armor stacks; otherwise it waits for full charge;
   - uses lightning in its cone, and mortar for far or indirect targets;
   - strafes unpredictably, dodges incoming mortar shells, and faces its attacker to avoid the 1.5× rear damage.
 - **Retreat**: compares time-to-kill with time-to-live. It falls back to a cover point that breaks line of sight from all threats, keeps shooting while it backs off, and re-engages once it has regenerated. When several opponents have line of sight and can win the exchange, it heads for cover even at high HP. It avoids shooting crates and drones while withdrawing so it can regenerate.

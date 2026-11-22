@@ -1080,19 +1080,30 @@ class Bot {
         const fullCharge = l.stats.charge ?? 0.75
         const yErr = Math.abs(wrap(instAim[0] - curYaw)), pErr = Math.abs(instAim[1] - curPitch)
         const tolL = Math.atan2(rad * 0.6, dist)
+        let finishNow = false
         if (dist < (l.stats.range ?? 280) * 0.97) {
           if (l.charge > 0) {
             // charging: keep holding until full and aligned
+            // Release as soon as a centered beam can finish a mech, allowing
+            // for three armor stacks and the minimum effective charge.
+            const minCharge = l.stats.min_charge
+            if (tgt.kind === "mech" && l.charge >= minCharge && yErr < tolL && pErr < tolL) {
+              const fraction = clamp((l.charge-minCharge)/Math.max(0.01,fullCharge-minCharge),0,1)
+              const power = l.stats.min_frac + (1-l.stats.min_frac)*fraction
+              const cubes = 1+this.cfg.cubes.damage_per_cube*Math.min(me.cubes,this.cfg.cubes.stat_cap)
+              const bonus = tgt.weapons.includes("mortar") ? 1+l.stats.cookoff : 1
+              finishNow = tgt.hp <= l.stats.damage*power*cubes*bonus*0.76
+            }
             const ready = l.charge >= fullCharge - 0.02
             if (ready && yErr < tolL && pErr < tolL * 1.5) fire[lzS] = false
             else fire[lzS] = true
-            if (ready && yErr < tolL * 1.6) fire[lzS] = false
+            if (finishNow || (ready && yErr < tolL * 1.6)) fire[lzS] = false
           } else if (l.cooldown <= 0.05) {
             fire[lzS] = true // start charge
           }
           // when using the laser, aim without bullet lead (hitscan)
           if (l.charge > 0 || l.cooldown <= 0.1) {
-            if (!(gunS >= 0 && fire[gunS] && l.charge < fullCharge * 0.5)) aim = instAim
+            if (finishNow || !(gunS >= 0 && fire[gunS] && l.charge < fullCharge * 0.5)) aim = instAim
           }
         } else if (l.charge > 0) fire[lzS] = false
       }
