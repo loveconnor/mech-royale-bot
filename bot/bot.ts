@@ -554,9 +554,30 @@ class Bot {
     // check strafe direction is walkable
     let sx = px, sy = py
     if (!W!.walkLine(pos[0], pos[1], pos[0] + px * 6, pos[1] + py * 6)) { this.strafeDir *= -1; sx = -px; sy = -py }
-    const ox = mv[0] * 0.8 + sx * 0.7, oy = mv[1] * 0.8 + sy * 0.7
-    const n = Math.hypot(ox, oy) || 1
-    return [ox / n, oy / n]
+    const unit = (x: number, y: number): number[] => {
+      const length = Math.hypot(x,y) || 1
+      return [x/length,y/length]
+    }
+    const preferred = unit(mv[0]*0.8 + sx*0.7, mv[1]*0.8 + sy*0.7)
+    // The path and the sidestep can each be clear while their diagonal
+    // crosses a building corner. Check the command the legs will receive.
+    if (!this.me.grounded || this.climbH !== null) return preferred
+    const cell = W!.toCell(pos[0],pos[1])
+    if (cell < 0 || !W!.walk[cell] || Math.abs(W!.hN[cell]-pos[2]) > 1.5) return preferred
+    const clear = (direction: number[], distance: number) =>
+      W!.walkLine(pos[0],pos[1],pos[0]+direction[0]*distance,pos[1]+direction[1]*distance)
+    if (clear(preferred,6)) return preferred
+
+    const alternatives = [
+      unit(mv[0]*0.8 - sx*0.7,mv[1]*0.8 - sy*0.7), mv, [sx,sy], [-sx,-sy]
+    ].filter(v => Math.hypot(v[0],v[1]) > 0.5)
+    for (const distance of [6,3]) {
+      if (distance === 3 && clear(preferred,distance)) return preferred
+      for (const direction of alternatives) {
+        if (clear(direction,distance)) return direction
+      }
+    }
+    return preferred
   }
 
   coverPoint(pos: number[], threats: Track[], zone: any): [number, number] {
