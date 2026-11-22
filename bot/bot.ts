@@ -81,6 +81,8 @@ class Bot {
   pickMem = new Map<number, { pos: V3; kind: string; t: number }>()
   cubeMem = new Map<number, { pos: V3; t: number }>()
   badPick = new Map<number, number>()
+  lootProgress: { id: number; distance: number; since: number } | null = null
+  retryLootAt = new Map<number, number>()
   killSites: { pos: V3; t: number }[] = []
   sndMem: { x: number; y: number; t: number; kind: string }[] = []
   npcMem = new Map<number, { pos: V3; t: number; hp: number }>()
@@ -110,6 +112,7 @@ class Bot {
   busy(ms = 18) { return performance.now() - this.t0 > ms }
   act(obs: Observation): Omit<Action, "tick"> {
     this.t0 = performance.now()
+    this.clearShots.clear()
     const me = obs.self
     if (P.quit && obs.t > P.quit) return { move: [0, 0], fire: [false, false], boost: false } as any
     this.me = me
@@ -144,6 +147,7 @@ class Bot {
 
     // --- choose movement goal ---
     let goal: [number, number] | null = null
+    let lootId: number | undefined
     let face: number | null = null // desired aim yaw when no target
     let boost = false
     let mode = "roam"
@@ -182,7 +186,7 @@ class Bot {
     // an enemy right on top of us: fight instead of turning our back
     const closeFight = target && this.t - target.seenT < 0.6 && d2(target.pos, pos) < 22 && this.losClear(pos, target)
 
-    let wg: { pos: [number, number]; what: string } | null = null
+    let wg: { pos: [number, number]; what: string; id?: number } | null = null
     let rg: [number, number] | null = null
     const zoneUrgent = zone.urgent
     if (zoneUrgent || !me.in_zone) {
@@ -216,6 +220,7 @@ class Bot {
     } else if ((wg = !this.hasSpecial() ? this.lootGoal(obs, zone, enemies, true) : null) && wg.what === "wpn" && !(target && d2(target.pos, pos) < 60 && this.dmgFrom(target.id, 4) > 0)) {
       mode = "getweapon"
       goal = wg.pos
+      lootId = wg.id
     } else if (target && this.wantEngage(target, hpFrac, enemies)) {
       mode = "fight"
       const cube = this.combatCube(obs, target, zone)
@@ -230,7 +235,7 @@ class Bot {
       goal = [pos[0], pos[1]]
     } else {
       const lg = this.lootGoal(obs, zone, enemies, false)
-      if (lg) { mode = "loot:" + lg.what; goal = lg.pos }
+      if (lg) { mode = "loot:" + lg.what; goal = lg.pos; lootId = lg.id }
       else {
         if (!this.hasSpecial() && !(P.huntNow && this.t > P.huntNow)) { mode = "explore"; goal = this.explore(zone) }
         else if (P.hunt && hpFrac > P.huntHp && (rg = this.huntGoal(zone))) { mode = "hunt"; goal = rg }
@@ -238,6 +243,7 @@ class Bot {
         else { mode = "roam"; goal = this.roamGoal(zone) }
       }
     }
+    this.updateLootProgress(lootId, goal, obs)
     this.mode = mode
 
     // --- movement ---
@@ -676,28 +682,44 @@ class Bot {
     return dl < zone.r - 30 && !zone.urgent && zone.timeLeft > 25
   }
 
-  lootGoal(obs: Observation, zone: any, enemies: Track[], wantWeapon: boolean): { pos: [number, number]; what: string } | null {
+  updateLootProgress(id: number | undefined, goal: [number, number] | null, obs: Observation) {
+    if (id === undefined || !goal) { this.lootProgress = null; return }
+    const distance = d2(obs.self.pos, goal)
+    const previous = this.lootProgress
+    if (!previous || previous.id !== id || distance < previous.distance - 2 ||
+        obs.events.some(e => e.type === "hit" && e.target === id)) {
+      this.lootProgress = {id, distance, since: this.t}
+      return
+    }
+    // Allow a normal reload near a crate and a longer detour around a wall.
+    if (this.t-previous.since < (distance < 12 ? 4 : 7)) return
+    this.retryLootAt.set(id, this.t+16)
+    this.lootProgress = null
+  }
+
+  lootGoal(obs: Observation, zone: any, enemies: Track[], wantWeapon: boolean): { pos: [number, number]; what: string; id?: number } | null {
     const pos = this.me.pos
-    let best: { pos: [number, number]; what: string } | null = null, bs = 1e9
+    let best: { pos: [number, number]; what: string; id?: number } | null = null, bs = 1e9
     const nearEnemy = enemies.some((e) => d2(e.pos, pos) < 60)
-    const consider = (p: number[], cost: number, what: string) => {
+    const consider = (p: number[], cost: number, what: string, id?: number) => {
+      if (id !== undefined && (this.retryLootAt.get(id) ?? 0) > this.t) return
       if (p[2] > W!.surfAt(p[0], p[1]) + 3) return // floating?
       if (!this.zoneOk(p, zone)) return
       // roofs: only worth it for weapons, and only if reachable without a big climb
       const rise = p[2] - pos[2]
       if (rise > 2) { if (what !== "wpn" || rise > 30) return; cost += 20 + rise * 2 }
-      if (cost < bs) { bs = cost; best = { pos: [p[0], p[1]], what } }
+      if (cost < bs) { bs = cost; best = { pos: [p[0], p[1]], what, id } }
     }
-    for (const [, p] of this.pickMem) {
+    for (const [id, p] of this.pickMem) {
       if (!this.pickupWanted(p.kind)) continue
       const d = d2(p.pos, pos)
       if (d > (wantWeapon ? 230 : P.lootRange * 1.5)) continue
-      consider(p.pos, d * (wantWeapon ? 0.3 : 0.6), "wpn")
+      consider(p.pos, d * (wantWeapon ? 0.3 : 0.6), "wpn", id)
     }
-    for (const [, c] of this.cubeMem) {
+    for (const [id, c] of this.cubeMem) {
       const d = d2(c.pos, pos)
       if (d > P.lootRange) continue
-      consider(c.pos, d * 0.7, "cube")
+      consider(c.pos, d * 0.7, "cube", id)
     }
     this.killSites = this.killSites.filter((k) => this.t - k.t < 25 && d2(k.pos, pos) > 3)
     for (const k of this.killSites) {
@@ -705,15 +727,15 @@ class Bot {
       if (d > 150) continue
       consider(k.pos, d * 0.5, "kill")
     }
-    if (!nearEnemy && P.crateFarm) for (const [, c] of this.crateMem) {
+    if (!nearEnemy && P.crateFarm) for (const [id, c] of this.crateMem) {
       const d = d2(c.pos, pos)
       if (d > P.lootRange) continue
-      consider(c.pos, d * P.crateW + 25, "crate")
+      consider(c.pos, d * P.crateW + 25, "crate", id)
     }
-    if (!nearEnemy && P.npcHunt && this.me.hp / this.me.max_hp > 0.55) for (const [, n] of this.npcMem) {
+    if (!nearEnemy && P.npcHunt && this.me.hp / this.me.max_hp > 0.55) for (const [id, n] of this.npcMem) {
       const d = d2(n.pos, pos)
       if (d > P.npcRange || d < 50) continue
-      consider(n.pos, d * 0.5, "npc")
+      consider(n.pos, d * 0.5, "npc", id)
     }
     return best
   }
@@ -969,8 +991,13 @@ class Bot {
 
   centerZ(t: Track) { return t.pos[2] + (t.kind === "npc" ? 1.75 : 4.5 * (1 + 0.05 * (t.cubes || 0))) }
 
+  clearShots = new Map<number, boolean>()
   losClear(from: number[], t: Track) {
-    return !W!.blocked(from[0], from[1], from[2] + this.myMuzzle, t.pos[0], t.pos[1], this.centerZ(t), 1.5, 2)
+    const cached = this.clearShots.get(t.id)
+    if (cached !== undefined) return cached
+    const clear = !W!.blocked(from[0], from[1], from[2] + this.myMuzzle, t.pos[0], t.pos[1], this.centerZ(t), 1.5, 2)
+    this.clearShots.set(t.id, clear)
+    return clear
   }
 
   leadPoint(t: Track, speed: number): V3 {
