@@ -630,14 +630,16 @@ class Bot {
   lootActions(obs: Observation, act: any) {
     const me = this.me
     const pr = this.cfg.loot.pickup_radius
+    let bestRank = Infinity
     for (const p of obs.pickups as any[]) {
       if (Math.hypot(p.pos[0] - me.pos[0], p.pos[1] - me.pos[1]) > pr - 0.3 || Math.abs(p.pos[2] - me.pos[2]) > 3.8) continue
       if (this.badPick.has(p.id) && this.t - this.badPick.get(p.id)! < 2) continue
       const sl = this.slotFor(p.kind)
-      if (sl < 0) continue
+      const rank = this.wRank(p.kind)
+      if (sl < 0 || rank >= bestRank) continue
+      bestRank = rank
       act.take = p.id
       if (me.weapons[sl]) act.drop = sl
-      return
     }
   }
 
@@ -706,7 +708,10 @@ class Bot {
       if (!this.zoneOk(p, zone)) return
       // roofs: only worth it for weapons, and only if reachable without a big climb
       const rise = p[2] - pos[2]
-      if (rise > 2) { if (what !== "wpn" || rise > 30) return; cost += 20 + rise * 2 }
+      if (rise > 2 && (this.onRoof(p) || !W!.walkLine(pos[0], pos[1], p[0], p[1]))) {
+        if (what !== "wpn" || rise > 30) return
+        cost += 20 + rise * 2
+      }
       if (cost < bs) { bs = cost; best = { pos: [p[0], p[1]], what } }
     }
     for (const [, p] of this.pickMem) {
@@ -715,6 +720,9 @@ class Bot {
       if (d > (wantWeapon ? 230 : P.lootRange * 1.5)) continue
       consider(p.pos, d * (wantWeapon ? 0.3 : 0.6), "wpn")
     }
+    // The caller is deciding whether to divert for a second weapon before
+    // engaging. Other loot competes only during ordinary scavenging.
+    if (wantWeapon) return best
     for (const [, c] of this.cubeMem) {
       const d = d2(c.pos, pos)
       if (d > P.lootRange) continue
