@@ -14,6 +14,7 @@ The `Dockerfile` sits at the repo root. It builds a Bun image that runs `bot/bot
 - **Zone**: reads the live circle from each observation and gets inside the next circle with time to spare. A latch stops it flip-flopping at the edge.
 - **Loot**: weapon priority is laser > lightning > mortar (the gun is always kept). It explores until it finds a special weapon, collects cubes (including going back to kill sites), shoots crates and NPC drones for cubes, and moves toward a supply drop before it lands if it can reach and hold the ring before a nearby rival. A capture restores full HP and energy. During a fight it favors nearby cube clusters on walkable paths until the ten-cube HP and damage cap. Beyond the cap it makes a short combat detour only if the next cube unlocks an upgrade.
 - **Combat**:
+  - estimates pressure separately for each visible mech using recent hits, facing, charging, and closing speed. When several opponents are in view, it uses their estimated pressure and remaining HP to select a target and decide whether to retreat.
   - picks targets by threat (who is hurting us, low HP, distance, line of sight);
   - leads the gun using the target's velocity and fires only when the torso is actually aligned and the line of fire is clear;
   - charges the laser and releases it at full charge when aligned (hitscan, no lead);

@@ -132,7 +132,7 @@ class Bot {
     // --- targets ---
     const enemies = [...this.tracks.values()].filter((t) => t.kind === "mech" && this.t - t.seenT < 4)
     const npcs = [...this.tracks.values()].filter((t) => t.kind === "npc" && this.t - t.seenT < 1)
-    const target = this.chooseTarget(enemies)
+    let target = this.chooseTarget(enemies)
     const recentlyHurt = this.t - this.lastDmgT < 3
     const dangerEnemies = enemies.filter((e) => d2(e.pos, pos) < 160 && this.t - e.seenT < 2)
 
@@ -148,16 +148,30 @@ class Bot {
     let boost = false
     let mode = "roam"
     const losThreats = dangerEnemies.filter((e) => this.t - e.seenT < 1.0 && this.losClear(pos, e))
+    // A visible house mech can be waiting while a different hunter engages.
+    // Estimate immediate pressure independently for each mech.
+    const pressure = new Map(losThreats.map(e => [e.id,this.attackPressure(e,pos)]))
+    const attackers = losThreats.filter(e => pressure.get(e.id)! >= 0.65)
+    if (losThreats.length > 1) {
+      let bestValue = -Infinity
+      for (const foe of losThreats) {
+        const distance = d2(pos,foe.pos)
+        const seconds = foe.hp / Math.max(1,this.myDps(distance))
+        // A disabled or distracted mech can yield a place before a longer duel.
+        const value = (1 + (pressure.get(foe.id) ?? 0)*0.45) / (seconds+1.5)
+        if (value > bestValue) { bestValue = value; target = foe }
+      }
+    }
     // time-to-kill comparison
     let theirDps = 0
-    for (const e of losThreats) theirDps += this.dpsOf(e.weapons, e.cubes, d2(e.pos, pos))
+    for (const e of losThreats) theirDps += (pressure.get(e.id) ?? 1) * this.dpsOf(e.weapons, e.cubes, d2(e.pos, pos))
     const armor = (me.stats as any)?.armor ?? 0
     const myTTL = (me.hp / Math.max(0.2, 1 - armor)) / Math.max(1, theirDps)
     const tgtHp = target ? target.hp : 1e9
     const myTTK = target ? tgtHp / Math.max(1, this.myDps(d2(target.pos, pos))) : 1e9
     const losing = losThreats.length > 0 && myTTL < myTTK * P.ttkRatio
     this.dbg = `ttl${myTTL.toFixed(1)} ttk${myTTK.toFixed(1)}`
-    const outnumbered = losThreats.length >= 2 && losing
+    const outnumbered = attackers.length >= 2 && losing
     if (!this.retreating && (outnumbered || hpFrac < P.retreatHp || (losing && hpFrac < 0.7)) && (dangerEnemies.length > 0 || recentlyHurt) && !(target && myTTK < 2.5 && !losing)) { this.retreating = true; this.coverGoal = null }
     if (this.retreating && !outnumbered && hpFrac > P.reengageHp) this.retreating = false
     // the target is nearly dead and we can finish it: keep fighting
@@ -182,7 +196,7 @@ class Bot {
       if (mode === "camp") goal = [pos[0], pos[1]]
     } else if (this.retreating && (!closeFight || outnumbered)) {
       mode = "retreat"
-      const threats = dangerEnemies.length ? dangerEnemies : enemies.filter((e) => this.t - e.seenT < 6)
+      const threats = attackers.length ? attackers : dangerEnemies.length ? dangerEnemies : enemies.filter((e) => this.t - e.seenT < 6)
       if (threats.length) {
         if (!this.coverGoal || (this.t - this.coverT > 1.5 && !this.busy(8))) { this.coverGoal = this.coverPoint(pos, threats, zone); this.coverT = this.t }
         goal = this.coverGoal
@@ -398,6 +412,17 @@ class Bot {
   insideNext(p: number[], zone: any, extra = 0) { return d2(p, zone.nc) < zone.nr - zone.margin - extra }
 
   // ---------------- decisions ----------------
+  attackPressure(foe: Track, pos: number[]): number {
+    if (this.dmgFrom(foe.id, 3) > 0) return 1
+    const dx = pos[0]-foe.pos[0], dy = pos[1]-foe.pos[1]
+    const distance = Math.max(1,Math.hypot(dx,dy))
+    const aimError = Math.abs(wrap(Math.atan2(dy,dx)-foe.aim[0]))
+    if (aimError < Math.atan2(this.myR+3,distance) + 0.10 || (foe.charging && aimError < 0.4)) return 1
+    const closing = (foe.vel[0]*dx + foe.vel[1]*dy)/distance
+    if (closing > 5 && aimError < 0.8) return 0.7
+    return distance < 45 ? 0.5 : 0.25
+  }
+
   threatScore(e: Track) {
     const pos = this.me.pos
     const d = d3(e.pos, pos)
