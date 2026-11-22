@@ -18,7 +18,7 @@ The `Dockerfile` sits at the repo root. It builds a Bun image that runs `bot/bot
   - leads the gun using the target's velocity and fires only when the torso is actually aligned and the line of fire is clear;
   - charges the laser and releases it at full charge when aligned (hitscan, no lead);
   - uses lightning in its cone, and mortar for far or indirect targets;
-  - strafes unpredictably, dodges incoming mortar shells, and faces its attacker to avoid the 1.5× rear damage.
+  - during grounded fights and retreats, evaluates up to 12 headings at walking and boost speeds over a 0.96-second horizon. The score accounts for cover, weapon range, visible projectiles, terrain, zone pressure, and progress toward the current goal. It replans about every 0.2 seconds, falls back to navigation when no route is feasible, and keeps the mortar dodge as an immediate override.
 - **Retreat**: compares time-to-kill with time-to-live. It falls back to a cover point that breaks line of sight from all threats, keeps shooting while it backs off, and re-engages once it has regenerated. When several opponents have line of sight and can win the exchange, it heads for cover even at high HP. It avoids shooting crates and drones while withdrawing so it can regenerate.
 - **Upgrades**: armor, then nanites, plating, and laser/gun upgrades.
 

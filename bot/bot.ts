@@ -229,6 +229,10 @@ class Bot {
       mv = this.fightMove(target, mv)
       if (P.fboost && me.energy > P.fboost && this.t - target.seenT < 0.5 && this.losClear(pos, target)) boost = true
     }
+    if ((mode === "fight" || mode === "retreat") && target && me.grounded && this.climbH === null && !this.busy(8)) {
+      const plan = this.planMovement(obs, target, dangerEnemies, mv, zone)
+      if (plan) { mv = plan.move; boost = plan.boost }
+    }
     let evade = this.shellEvade(obs)
     if (!evade && mode !== "zone") { evade = this.laserDodge(obs); if (evade) this.strafeT = this.t + 0.3 + this.rng() * 0.3 }
     if (evade) { mv = evade; boost = true }
@@ -499,6 +503,79 @@ class Bot {
     const ox = mv[0] * 0.8 + sx * 0.7, oy = mv[1] * 0.8 + sy * 0.7
     const n = Math.hypot(ox, oy) || 1
     return [ox / n, oy / n]
+  }
+
+  lastPlan: { move: number[]; boost: boolean } | null = null
+  planUntil = -1
+  planMode = ""
+  planTarget = -1
+
+  planMovement(obs: Observation, target: Track, enemies: Track[], route: number[], zone: ReturnType<Bot["zoneInfo"]>) {
+    if (this.t < this.planUntil && this.planMode === this.mode && this.planTarget === target.id) return this.lastPlan
+    const me = obs.self, pos = me.pos
+    const cell = W!.toCell(pos[0], pos[1])
+    if (cell < 0 || Math.abs(W!.hN[cell] - pos[2]) > 2) return null
+    const retreat = this.mode === "retreat"
+    const currentDistance = d2(pos, target.pos)
+    const preferred = this.prefRange(target)
+    const foes = [target, ...enemies.filter(e => e.id !== target.id).sort((a,b) => d2(a.pos,pos) - d2(b.pos,pos))].slice(0, 4)
+    const shots = obs.projectiles.filter(p => p.kind !== "mortar" && d2(pos,p.pos) < 165)
+    const laser = me.weapons.find(w => w?.kind === "laser")
+    const arc = me.weapons.find(w => w?.kind === "lightning")
+    const gun = me.weapons.find(w => w?.kind === "gun")
+    const charging = !!laser && laser.charge > 0
+    const attackReady = charging || (laser && laser.cooldown < 0.35) || (gun && gun.reload === 0 && gun.ammo > 0)
+    const dt = 0.32
+    const moveAngle = Math.atan2(route[1],route[0])
+    let best = null, bestScore = -Infinity
+    for (let direction = 0; direction < 12; direction++) {
+      if (this.busy(15)) break
+      const angle = moveAngle + direction * TAU / 12
+      const dx = Math.cos(angle), dy = Math.sin(angle)
+      for (const boost of [false,true]) {
+        if (boost && (charging || me.energy < (arc ? 48 : 30))) continue
+        const speed = (boost ? this.cfg.mech.boost_speed : this.cfg.mech.walk_speed) * (charging ? this.cfg.mech.charge_move_mult : 1)
+        let x = pos[0], y = pos[1], vx = me.vel[0], vy = me.vel[1], score = boost ? -4 : 0
+        for (let step = 1; step <= 3; step++) {
+          const time = step * dt
+          const dvx = speed * dx - vx, dvy = speed * dy - vy
+          const f = Math.min(1, this.cfg.mech.ground_accel * dt / Math.max(0.01, Math.hypot(dvx,dvy)))
+          const nx = x + (vx + dvx * f * 0.5) * dt, ny = y + (vy + dvy * f * 0.5) * dt
+          if (!W!.walkLine(x,y,nx,ny)) { score = -Infinity; break }
+          const height = W!.hN[W!.toCell(nx,ny)]
+          for (const shot of shots) {
+            const rx = shot.pos[0] + shot.vel[0] * (time-dt) - x, ry = shot.pos[1] + shot.vel[1] * (time-dt) - y
+            const ux = shot.vel[0] - (nx-x)/dt, uy = shot.vel[1] - (ny-y)/dt
+            const hitTime = clamp(-(rx*ux+ry*uy)/Math.max(1,ux*ux+uy*uy),0,dt)
+            const z = shot.pos[2] + shot.vel[2] * (time-dt+hitTime)
+            if (z > height && z < height + this.myEye + 1 && Math.hypot(rx+ux*hitTime,ry+uy*hitTime) < this.myR+0.4) score -= 45
+          }
+          x = nx; y = ny; vx += dvx*f; vy += dvy*f
+          score -= Math.max(0,Math.hypot(x-zone.cx,y-zone.cy)-zone.r) * 4
+          for (const foe of foes) {
+            const ex = foe.pos[0]+foe.vel[0]*time, ey = foe.pos[1]+foe.vel[1]*time
+            const dist = Math.max(1,Math.hypot(x-ex,y-ey))
+            const blocked = W!.blocked(x,y,height+this.myMuzzle,ex,ey,this.centerZ(foe),2,2)
+            if (foe === target && !retreat) {
+              score += (Math.abs(currentDistance-preferred)-Math.abs(dist-preferred)) * 0.45
+              if (!blocked) score += attackReady ? 12 : 3
+              if (!blocked && arc && dist < arc.stats.range && me.energy > 12) score += 19
+            }
+            if (blocked) continue
+            const facing = Math.cos(foe.aim[0])*(x-ex)/dist+Math.sin(foe.aim[0])*(y-ey)/dist
+            const exposed = (retreat ? 15 : 5) + (foe.charging ? 13 : 0) + (foe.weapons.includes("lightning") && dist < 45 ? 15 : 0)
+            score -= exposed * (facing > 0.8 ? 1 : 0.45)
+            // Lateral motion changes the lead an opponent needs for its next shot.
+            const lateralSpeed = Math.abs(vx*(y-ey)-vy*(x-ex))/dist
+            score += Math.min(16,lateralSpeed)*0.30
+          }
+        }
+        score += ((x-pos[0])*route[0]+(y-pos[1])*route[1]) * (retreat ? 1.5 : 0.45)
+        if (score > bestScore) { bestScore = score; best = {move:[dx,dy],boost} }
+      }
+    }
+    this.lastPlan = best; this.planUntil = this.t+0.19; this.planMode = this.mode; this.planTarget = target.id
+    return best
   }
 
   coverPoint(pos: number[], threats: Track[], zone: any): [number, number] {
