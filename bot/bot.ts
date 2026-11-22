@@ -243,7 +243,20 @@ class Bot {
     // --- movement ---
     let mv = goal ? this.steer(pos, goal) : [0, 0]
     if (mode === "fight" && target) {
+      const route = mv
       mv = this.fightMove(target, mv)
+      const arc = me.weapons.find(w => w?.kind === "lightning")
+      const distance = d2(pos,target.pos)
+      const chase = arc && distance > arc.stats.range*0.85 && distance < 135 &&
+        target.vis && (hpFrac > 0.50 || target.hp < me.hp) && attackers.length < 2
+      const kite = !arc && target.weapons.includes("lightning") && distance < 53
+      if ((chase || kite) && me.energy > (chase ? 42 : 30) && me.grounded &&
+          Math.hypot(route[0],route[1]) > 0.5 && this.losClear(pos,target)) {
+        const x = route[0]*0.75 + mv[0]*0.25, y = route[1]*0.75 + mv[1]*0.25
+        const length = Math.hypot(x,y) || 1
+        mv = [x/length,y/length]
+        boost = true
+      }
       if (P.fboost && me.energy > P.fboost && this.t - target.seenT < 0.5 && this.losClear(pos, target)) boost = true
     }
     let evade = this.shellEvade(obs)
@@ -487,8 +500,11 @@ class Bot {
   hasWeapon(kind: string) { return this.me.weapons.some((w: any) => w && w.kind === kind) }
 
   prefRange(t: Track) {
-    if (this.hasWeapon("lightning") && this.me.energy > 20) return 28
-    if (this.hasWeapon("laser")) return 90
+    const arc = this.me.weapons.find((w: any) => w?.kind === "lightning")
+    if (arc && this.me.energy > 20) return 0.72 * arc.stats.range
+    if (t.weapons.includes("lightning")) return 76
+    if (this.hasWeapon("laser")) return t.weapons.includes("gun") && t.weapons.length === 1 ? 52 : 69
+    if (this.hasWeapon("mortar") && t.weapons.includes("laser")) return 100
     return 70
   }
 
