@@ -1052,6 +1052,8 @@ class Bot {
       }
     }
 
+    let gunPoint: V3 | null = null
+    let gunRadius = 0
     if (tgt) {
       const dist = d3(tgt.pos, pos)
       const gunSpeed = gunS >= 0 ? ws[gunS].stats.speed : 252
@@ -1064,6 +1066,10 @@ class Bot {
       // gun
       if (gunS >= 0) {
         const g = ws[gunS]
+        if (tgt.kind === "mech" && g.ammo > 0 && g.reload === 0 && dist < g.stats.range) {
+          gunPoint = lead
+          gunRadius = rad
+        }
         if (aligned && g.ammo > 0 && g.reload === 0 && dist < g.stats.range) fire[gunS] = true
       }
       // lightning
@@ -1103,7 +1109,10 @@ class Bot {
           }
           // when using the laser, aim without bullet lead (hitscan)
           if (l.charge > 0 || l.cooldown <= 0.1) {
-            if (finishNow || !(gunS >= 0 && fire[gunS] && l.charge < fullCharge * 0.5)) aim = instAim
+            // A charging beam needs the shared aim only as its release nears.
+            const timeToBeam = Math.max(0,fullCharge-l.charge)
+            const turnToBeam = Math.max(yErr/me.stats.turn_rate,pErr/me.stats.pitch_rate)
+            if (finishNow || timeToBeam < turnToBeam+0.16 || gunS < 0 || ws[gunS].reload > 0) aim = instAim
           }
         } else if (l.charge > 0) fire[lzS] = false
       }
@@ -1176,6 +1185,21 @@ class Bot {
     // pre-charge behind cover for an enemy we expect to see soon
     if (!withdrawing && P.precharge && lzS >= 0 && !tgt && ws[lzS].charge === 0 && ws[lzS].cooldown <= 0.05 && target && target.kind === "mech" && this.t - target.seenT < 3 && d2(target.pos, pos) < 170 && !["zone", "retreat", "getweapon", "explore", "regen"].includes(this.mode)) fire[lzS] = true
     act.aim = [aim[0], clamp(aim[1], this.cfg.mech.min_pitch, this.cfg.mech.max_pitch)]
+    if (gunPoint && gunS >= 0 && !fire[gunS]) {
+      const g=ws[gunS], step=1/this.cfg.match.tick_hz
+      if (g.cooldown <= step*this.cfg.match.decide_every) {
+        // Test the first physics tick on which the gun can fire. The torso
+        // follows the final shared aim even if the other slot requested it.
+        const dt = Math.max(step,Math.ceil(g.cooldown/step)*step)
+        const yaw = curYaw + clamp(wrap(act.aim[0]-curYaw),-me.stats.turn_rate*dt,me.stats.turn_rate*dt)
+        const pitch = curPitch + clamp(act.aim[1]-curPitch,-me.stats.pitch_rate*dt,me.stats.pitch_rate*dt)
+        const desired=this.aimTo(gunPoint), distance=d2(pos,gunPoint)
+        const lateral = distance*Math.sin(wrap(yaw-desired[0]))
+        const vertical = distance*(Math.tan(pitch)-Math.tan(desired[1]))
+        if (Math.cos(yaw-desired[0]) > 0 && Math.abs(lateral)<gunRadius*0.95 &&
+            Math.abs(vertical)<gunRadius*1.45) fire[gunS]=true
+      }
+    }
     act.fire = fire
   }
 }
