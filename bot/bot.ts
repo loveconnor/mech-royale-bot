@@ -106,6 +106,10 @@ class Bot {
     }
   }
 
+  lastLaserThreat = -Infinity
+  lastBeamHit = -Infinity
+  beamSource: V3 | null = null
+  beamCover: [number, number] | null = null
   t0 = 0
   busy(ms = 18) { return performance.now() - this.t0 > ms }
   act(obs: Observation): Omit<Action, "tick"> {
@@ -184,11 +188,19 @@ class Bot {
 
     let wg: { pos: [number, number]; what: string } | null = null
     let rg: [number, number] | null = null
+    if (losThreats.some(e => e.weapons.includes("laser") && (e.charging || this.dmgFrom(e.id, 2) > 0))) {
+      this.lastLaserThreat = this.t
+    }
     const zoneUrgent = zone.urgent
     if (zoneUrgent || !me.in_zone) {
       mode = "zone"
       goal = zone.safePoint
       boost = !me.in_zone || zone.veryUrgent
+    } else if (!losThreats.length && this.beamSource && this.t - this.lastBeamHit < 3) {
+      mode = "retreat"
+      this.beamCover ??= this.coverPoint(pos, [this.beamSource], zone)
+      goal = this.beamCover
+      boost = d2(pos, goal) > 4
     } else if (P.dropGo && (rg = this.dropGoal(obs, zone, enemies, myTTL))) {
       mode = "drop"
       goal = rg
@@ -201,7 +213,7 @@ class Bot {
       mode = "retreat"
       const threats = attackers.length ? attackers : dangerEnemies.length ? dangerEnemies : enemies.filter((e) => this.t - e.seenT < 6)
       if (threats.length) {
-        if (!this.coverGoal || (this.t - this.coverT > 1.5 && !this.busy(8))) { this.coverGoal = this.coverPoint(pos, threats, zone); this.coverT = this.t }
+        if (!this.coverGoal || (this.t - this.coverT > 1.5 && !this.busy(8))) { this.coverGoal = this.coverPoint(pos, threats.map(({pos}): V3 => [pos[0], pos[1], pos[2]+8]), zone); this.coverT = this.t }
         goal = this.coverGoal
         boost = d2(pos, goal) > 4 && recentlyHurt
       } else {
@@ -356,6 +368,13 @@ class Bot {
   handleEvents(obs: Observation) {
     for (const e of obs.events as any[]) {
       if (e.type === "damaged") {
+        if (e.weapon === "laser") {
+          this.lastLaserThreat = this.t
+          this.lastBeamHit = this.t
+          const beam = obs.beams.find(b => b.by === e.by && b.kind === "laser")
+          this.beamSource = beam?.path[0] ?? null
+          this.beamCover = null
+        }
         this.dmgLog.push({ t: this.t, by: e.by, amt: e.amount, bearing: e.bearing })
         if (e.weapon !== "zone") this.lastDmgT = this.t
       } else if (e.type === "kill") {
@@ -559,9 +578,9 @@ class Bot {
     return [ox / n, oy / n]
   }
 
-  coverPoint(pos: number[], threats: Track[], zone: any): [number, number] {
+  coverPoint(pos: number[], threats: V3[], zone: any): [number, number] {
     let best: [number, number] = [pos[0], pos[1]], bs = -1e9
-    const tx = threats.reduce((s, t) => s + t.pos[0], 0) / threats.length, ty = threats.reduce((s, t) => s + t.pos[1], 0) / threats.length
+    const tx = threats.reduce((s, t) => s + t[0], 0) / threats.length, ty = threats.reduce((s, t) => s + t[1], 0) / threats.length
     const away = Math.atan2(pos[1] - ty, pos[0] - tx)
     for (let k = 0; k < 12; k++) {
       const a = (k / 12) * TAU
@@ -571,7 +590,7 @@ class Bot {
         if (c < 0 || !W!.walk[c]) continue
         let hidden = 0
         const gz = W!.hN[c] + this.myEye
-        for (const t of threats.slice(0, 3)) if (W!.blocked(t.pos[0], t.pos[1], t.pos[2] + 8, x, y, gz, 3)) hidden++
+        for (const t of threats.slice(0, 3)) if (W!.blocked(t[0], t[1], t[2], x, y, gz, 3)) hidden++
         let s = hidden * 100 - r * 0.8 + 25 * Math.cos(wrap(a - away))
         if (!this.insideNext([x, y], zone) && !(zone.nr > 300)) s -= 60
         if (!W!.walkLine(pos[0], pos[1], x, y)) s -= 30
@@ -590,6 +609,7 @@ class Bot {
 
   // which slot would a new weapon of this kind go into (-1 = not wanted)
   slotFor(kind: string): number {
+    if (kind === "mortar" && this.t - this.lastLaserThreat < 8) return -1
     const ws = this.me.weapons
     const have = ws.map((w: any) => (w ? w.kind : null))
     if (have.includes(kind)) return -1
@@ -608,6 +628,8 @@ class Bot {
 
   lootActions(obs: Observation, act: any) {
     const me = this.me
+    const mortar = me.weapons.findIndex((w: any) => w?.kind === "mortar")
+    if (mortar >= 0 && this.t - this.lastLaserThreat < 8) act.drop = mortar
     const pr = this.cfg.loot.pickup_radius
     for (const p of obs.pickups as any[]) {
       if (Math.hypot(p.pos[0] - me.pos[0], p.pos[1] - me.pos[1]) > pr - 0.3 || Math.abs(p.pos[2] - me.pos[2]) > 3.8) continue

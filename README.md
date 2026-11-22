@@ -17,6 +17,7 @@ The `Dockerfile` sits at the repo root. It builds a Bun image that runs `bot/bot
   - estimates pressure separately for each visible mech using recent hits, facing, charging, and closing speed. When several opponents are in view, it uses their estimated pressure and remaining HP to select a target and decide whether to retreat.
   - accounts for the rear damage multiplier when choosing between visible targets and circles toward the exposed side of distracted opponents;
   - between mech engagements, turns its front armor toward the directions responsible for the most recent damage;
+  - when an unseen laser hits, uses the observed beam origin to find cover. It sheds the mortar under laser threat to avoid bonus damage and waits eight seconds after the threat passes before picking one up again;
   - leads the gun using the target's velocity and fires only when the torso is actually aligned and the line of fire is clear;
   - charges the laser and releases it at full charge when aligned (hitscan, no lead);
   - uses lightning in its cone, and mortar for far or indirect targets;
