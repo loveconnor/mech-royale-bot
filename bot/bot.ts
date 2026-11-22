@@ -1107,10 +1107,22 @@ class Bot {
           }
         } else if (l.charge > 0) fire[lzS] = false
       }
-      // mortar: only for far or indirect targets
       if (moS >= 0) {
         const m = ws[moS]
-        if (m.cooldown <= 0 && dist > 30 && dist < 220 && !(lzS >= 0 && ws[lzS].charge > 0)) {
+        // At close range the gun and mortar can both hit the same mech.
+        // Aim the tube into the lower torso and keep an aligned gun trigger.
+        if (tgt.kind === "mech" && m.cooldown <= 0 && dist <= 60 &&
+            dist > Math.max(16, this.myR+this.cfg.weapons.mortar.splash_radius+4)) {
+          const arrival = dist/m.stats.speed
+          const point = [tgt.pos[0]+tgt.vel[0]*arrival, tgt.pos[1]+tgt.vel[1]*arrival,
+            tgt.pos[2]+0.7*(this.centerZ(tgt)-tgt.pos[2])]
+          const arc = this.mortarSolve(point,false)
+          if (arc && arc[1] > this.cfg.mech.min_pitch && arc[1] < this.cfg.mech.max_pitch) {
+            aim = [arc[0],arc[1]]
+            const tolerance = Math.atan2(rad*0.75,dist)
+            fire[moS] = Math.abs(wrap(arc[0]-curYaw)) < tolerance && Math.abs(arc[1]-curPitch) < tolerance
+          }
+        } else if (m.cooldown <= 0 && dist > 30 && dist < 220 && !(lzS >= 0 && ws[lzS].charge > 0)) {
           const sol0 = this.mortarSolve([tgt.pos[0], tgt.pos[1], tgt.pos[2]], false)
           if (sol0) {
             const lp = [tgt.pos[0] + tgt.vel[0] * sol0[2], tgt.pos[1] + tgt.vel[1] * sol0[2], tgt.pos[2]]
